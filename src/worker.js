@@ -637,6 +637,40 @@ async function scan(db, env) {
 // ─────────────────────────────────────
 // API HANDLERS
 // ─────────────────────────────────────
+
+// Auth helpers
+async function hmacSign(message, secret) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function createToken(env) {
+  const secret = env.DASHBOARD_PASSWORD;
+  const expires = Date.now() + 24 * 60 * 60 * 1000; // 24h
+  const payload = "tradebot:" + expires;
+  const sig = await hmacSign(payload, secret);
+  return payload + ":" + sig;
+}
+
+async function verifyToken(token, env) {
+  const secret = env.DASHBOARD_PASSWORD;
+  if (!secret || !token) return false;
+  const parts = token.split(":");
+  if (parts.length !== 3) return false;
+  const [prefix, expires, sig] = parts;
+  if (Date.now() > parseInt(expires)) return false;
+  const expected = await hmacSign(prefix + ":" + expires, secret);
+  return sig === expected;
+}
+
+function getTokenFromRequest(request) {
+  const cookies = request.headers.get("Cookie") || "";
+  const match = cookies.match(/tb_auth=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function cors(response) {
   response.headers.set("Access-Control-Allow-Origin", "*");
   response.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -657,6 +691,52 @@ async function handleAPI(request, env) {
   const db = env.DB;
 
   if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
+
+  // Auth: if DASHBOARD_PASSWORD is set, protect all routes
+  const needsAuth = !!env.DASHBOARD_PASSWORD;
+
+  // Login page (always accessible)
+  if (path === "/login" && request.method === "GET") {
+    if (!needsAuth) return Response.redirect(url.origin + "/", 302);
+    return new Response(LOGIN_HTML, { headers: { "Content-Type": "text/html" } });
+  }
+
+  // Login API
+  if (path === "/api/login" && request.method === "POST") {
+    if (!needsAuth) return json({ success: true });
+    const body = await request.json();
+    if (body.password === env.DASHBOARD_PASSWORD) {
+      const token = await createToken(env);
+      const res = json({ success: true });
+      res.headers.set("Set-Cookie", "tb_auth=" + encodeURIComponent(token) + "; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400");
+      return res;
+    }
+    return json({ error: "Password errata" }, 401);
+  }
+
+  // Logout
+  if (path === "/api/logout") {
+    const res = Response.redirect(url.origin + "/login", 302);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        "Location": url.origin + "/login",
+        "Set-Cookie": "tb_auth=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
+      }
+    });
+  }
+
+  // Check auth for all other routes
+  if (needsAuth) {
+    const token = getTokenFromRequest(request);
+    const valid = await verifyToken(token, env);
+    if (!valid) {
+      if (path.startsWith("/api/")) {
+        return json({ error: "Non autenticato" }, 401);
+      }
+      return Response.redirect(url.origin + "/login", 302);
+    }
+  }
 
   // GET /api/status — full status
   if (path === "/api/status") {
@@ -780,6 +860,54 @@ async function handleAPI(request, env) {
 
   return json({ error: "Not found" }, 404);
 }
+
+// ─────────────────────────────────────
+// LOGIN PAGE
+// ─────────────────────────────────────
+const LOGIN_HTML = `<!DOCTYPE html>
+<html lang="it"><head><meta charset="utf-8"><title>Trading Bot — Login</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#111827;--card:#1f2937;--border:#374151;--text:#f3f4f6;--text2:#9ca3af;--text3:#6b7280;--accent:#a78bfa;--red:#f87171;--green:#34d399}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:32px;width:360px;max-width:90vw;text-align:center}
+.login-box h1{font-size:1.3rem;margin-bottom:4px;display:flex;align-items:center;justify-content:center;gap:8px}
+.login-box h1 span{color:var(--accent);font-size:1.5rem}
+.login-sub{color:var(--text3);font-size:.85rem;margin-bottom:20px}
+.login-input{width:100%;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:1rem;margin-bottom:12px;outline:none}
+.login-input:focus{border-color:var(--accent)}
+.login-btn{width:100%;padding:12px;background:var(--accent);color:#0a0e1a;border:none;border-radius:6px;font-size:1rem;font-weight:700;cursor:pointer}
+.login-btn:hover{filter:brightness(1.15)}
+.login-btn:disabled{opacity:.5;cursor:wait}
+.login-err{color:var(--red);font-size:.85rem;margin-top:8px;display:none}
+</style></head><body>
+<div class="login-box">
+  <h1><span>◉</span> Trading Bot</h1>
+  <p class="login-sub">Inserisci la password per accedere</p>
+  <form onsubmit="doLogin(event)">
+    <input type="password" class="login-input" id="loginPwd" placeholder="Password" autocomplete="current-password" autofocus>
+    <button type="submit" class="login-btn" id="loginBtn">🔐 Accedi</button>
+  </form>
+  <div class="login-err" id="loginErr"></div>
+</div>
+<script>
+async function doLogin(e){
+  e.preventDefault();
+  const btn=document.getElementById("loginBtn");
+  const err=document.getElementById("loginErr");
+  const pwd=document.getElementById("loginPwd").value;
+  if(!pwd){err.textContent="Inserisci la password";err.style.display="block";return;}
+  btn.disabled=true;btn.textContent="⏳...";
+  try{
+    const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});
+    const d=await r.json();
+    if(d.success){window.location.href="/";}
+    else{err.textContent=d.error||"Errore";err.style.display="block";}
+  }catch(ex){err.textContent="Errore di connessione";err.style.display="block";}
+  btn.disabled=false;btn.textContent="🔐 Accedi";
+}
+<\/script></body></html>`;
 
 // ─────────────────────────────────────
 // MINI DASHBOARD HTML
@@ -995,6 +1123,8 @@ tr:hover td{background:#222d42}
   <hr class="sep">
   <button class="side-btn btn-danger" onclick="resetAll()">🗑 Reset</button>
   <hr class="sep">
+  <button class="side-btn" onclick="location.href=\\'/api/logout\\'">🚪 Logout</button>
+  <hr class="sep">
 
   <div class="side-label">Statistiche</div>
   <div class="side-stat" id="sTrades">Trade: 0</div>
@@ -1064,7 +1194,9 @@ let logs=[];let scanCount=0;
 async function load(){
   const bar=document.getElementById("refreshBar");bar.style.width="30%";
   try{
-    const r=await fetch(API+"/status");const d=await r.json();bar.style.width="80%";
+    const r=await fetch(API+"/status");
+    if(r.status===401){window.location.href="/login";return;}
+    const d=await r.json();bar.style.width="80%";
 
     // Source
     document.getElementById("srcName").textContent=d.dataSource||"Yahoo";
