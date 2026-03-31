@@ -22,6 +22,7 @@ const CONFIG_DEFAULTS = {
   max_weight: 2.0,
   min_trades_to_learn: 5,
   spread_slippage_pct: 0.001,
+  min_hold_hours: 2,
 };
 
 const CONFIG_META = {
@@ -37,6 +38,7 @@ const CONFIG_META = {
   max_weight: { label: "Brain peso massimo", type: "number", step: 0.1 },
   min_trades_to_learn: { label: "Min trade per apprendere", type: "number", step: 1 },
   spread_slippage_pct: { label: "Spread/Slippage (%)", type: "number", step: 0.0005, pct: true },
+  min_hold_hours: { label: "Ore minime prima SL/TP", type: "number", step: 1 },
 };
 
 async function getSettings(db) {
@@ -460,6 +462,15 @@ async function openPosition(db, ticker, name, price, atr, score, activeInd) {
   if (positions.length >= cfg.max_positions) return null;
   if (positions.find((p) => p.ticker === ticker)) return null;
 
+  // Cooldown check — no re-entry for N minutes after close
+  try {
+    const cooldown = await db.prepare("SELECT expires_at FROM cooldowns WHERE ticker=?").bind(ticker).first();
+    if (cooldown) {
+      if (new Date(cooldown.expires_at) > new Date()) return null;
+      await db.prepare("DELETE FROM cooldowns WHERE ticker=?").bind(ticker).run();
+    }
+  } catch (e) {}
+
   const capital = await getCapital(db);
   const slDist = Math.max(atr * 1.5, price * cfg.stop_loss_pct);
   if (slDist <= 0 || price <= 0) return null;
@@ -524,6 +535,13 @@ async function closePosition(db, ticker, price, reason) {
   // Remove position
   await db.prepare("DELETE FROM positions WHERE ticker=?").bind(ticker).run();
 
+  // Set cooldown — no re-entry for N minutes
+  try {
+    const cooldownExpiry = new Date(Date.now() + cfg.cooldown_minutes * 60 * 1000).toISOString();
+    await db.prepare("INSERT OR REPLACE INTO cooldowns (ticker, expires_at) VALUES (?, ?)")
+      .bind(ticker, cooldownExpiry).run();
+  } catch (e) {}
+
   return { ticker, name: pos.name, pnl, pnlPct, reason, brainMsg };
 }
 
@@ -569,6 +587,14 @@ async function scan(db, env) {
         .bind(livePrice, +((livePrice - pos.entry_price) * pos.shares).toFixed(2),
               +((livePrice - pos.entry_price) / pos.entry_price * 100).toFixed(2), pos.ticker).run();
 
+      // Minimum hold time — don't check SL/TP until min_hold_hours
+      const holdMs = Date.now() - new Date(pos.opened_at).getTime();
+      const minHoldMs = (cfg.min_hold_hours || 2) * 60 * 60 * 1000;
+      if (holdMs < minHoldMs) {
+        results.equity += livePrice * pos.shares;
+        continue;
+      }
+
       // Trailing stop (use daily high for highest tracking)
       const effectiveHigh = Math.max(high, livePrice);
       let highest = Math.max(pos.highest, effectiveHigh);
@@ -583,15 +609,15 @@ async function scan(db, env) {
       await db.prepare("UPDATE positions SET highest=?, stop_loss=?, trailing_active=? WHERE ticker=?")
         .bind(highest, sl, trailingActive, pos.ticker).run();
 
-      // Check SL/TP using live price
+      // Check SL/TP using ONLY live price (not stale daily high/low)
       if (pos.auto_sl) {
-        if (livePrice <= sl || low <= sl) {
-          const trade = await closePosition(db, pos.ticker, sl, "stop_loss");
+        if (livePrice <= sl) {
+          const trade = await closePosition(db, pos.ticker, livePrice, "stop_loss");
           if (trade) results.closes.push(trade);
           continue;
         }
-        if (livePrice >= pos.take_profit || high >= pos.take_profit) {
-          const trade = await closePosition(db, pos.ticker, pos.take_profit, "take_profit");
+        if (livePrice >= pos.take_profit) {
+          const trade = await closePosition(db, pos.ticker, livePrice, "take_profit");
           if (trade) results.closes.push(trade);
           continue;
         }
@@ -635,6 +661,11 @@ async function scan(db, env) {
 
   // Cleanup old scan logs
   await db.prepare("DELETE FROM scan_log WHERE id NOT IN (SELECT id FROM scan_log ORDER BY id DESC LIMIT 500)").run();
+
+  // Cleanup expired cooldowns
+  try {
+    await db.prepare("DELETE FROM cooldowns WHERE expires_at < ?").bind(new Date().toISOString()).run();
+  } catch (e) {}
 
   // Recalculate equity
   const updatedPositions = await getPositions(db);
@@ -843,6 +874,7 @@ async function handleAPI(request, env) {
     await db.prepare("DELETE FROM closed_trades").run();
     await db.prepare("DELETE FROM scan_log").run();
     await db.prepare("DELETE FROM brain_history").run();
+    try { await db.prepare("DELETE FROM cooldowns").run(); } catch (e) {}
     await db.prepare("UPDATE brain SET weight = default_weight").run();
     await setCapital(db, cfg.initial_capital);
     await db.prepare("INSERT OR REPLACE INTO config VALUES ('total_trades', '0')").run();

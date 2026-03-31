@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS scan_log (
   reasons TEXT
 );
 
+CREATE TABLE IF NOT EXISTS cooldowns (
+  ticker TEXT PRIMARY KEY,
+  expires_at TEXT NOT NULL
+);
+
 -- Valori iniziali brain
 INSERT OR IGNORE INTO brain VALUES ('macd_cross', 1.0, 1.0);
 INSERT OR IGNORE INTO brain VALUES ('macd_hist', 0.2, 0.2);
