@@ -1149,13 +1149,14 @@ tr:hover td{background:#222d42}
   <label>Profitto lordo (€)</label><input type="number" id="cGross" value="0">
   <label>Tassa plusvalenze (%)</label><input type="number" id="cTax" value="26">
   <label>IVAFE annuale (%)</label><input type="number" id="cIvafe" value="0.2">
+  <label>Giorni di detenzione</label><input type="number" id="cDays" value="365" min="1" max="365">
   <label>Spread cambio EUR/USD (%)</label><input type="number" id="cFx" value="0.5">
   <label>Costo prelievo (€)</label><input type="number" id="cWith" value="0">
   <label>Capitale investito (€)</label><input type="number" id="cCap" value="5000">
   <div style="margin-top:16px;border:2px solid var(--cyan);border-radius:8px;padding:14px" id="calcResults">
     <div class="modal-row"><span>Profitto lordo</span><span id="crGross">—</span></div>
     <div class="modal-row"><span class="r">Tassa 26%</span><span id="crTax" class="r">—</span></div>
-    <div class="modal-row"><span class="o">IVAFE 0.2%</span><span id="crIvafe" class="o">—</span></div>
+    <div class="modal-row"><span class="o">IVAFE 0.2% (<span id="crDays">365</span>gg)</span><span id="crIvafe" class="o">—</span></div>
     <div class="modal-row"><span class="y">Spread cambio</span><span id="crFx" class="y">—</span></div>
     <div class="modal-row"><span>Costo prelievo</span><span id="crWith">—</span></div>
     <div class="modal-row total"><span class="g">PROFITTO NETTO</span><span id="crNet" class="g">—</span></div>
@@ -1391,17 +1392,19 @@ function doCalc(){
   const gross=parseFloat(document.getElementById("cGross").value)||0;
   const taxPct=parseFloat(document.getElementById("cTax").value)/100;
   const ivafePct=parseFloat(document.getElementById("cIvafe").value)/100;
+  const days=Math.min(365,Math.max(1,parseInt(document.getElementById("cDays").value)||365));
   const fxPct=parseFloat(document.getElementById("cFx").value)/100;
   const withCost=parseFloat(document.getElementById("cWith").value)||0;
   const cap=parseFloat(document.getElementById("cCap").value)||5000;
   const tax=Math.max(0,gross)*taxPct;
-  const ivafe=(cap+Math.max(0,gross))*ivafePct;
+  const ivafe=(cap+Math.max(0,gross))*ivafePct*(days/365);
   const fx=(cap+gross)*fxPct;
   const total=tax+ivafe+fx+withCost;
   const net=gross-total;
   const pct=cap>0?(net/cap*100):0;
   document.getElementById("crGross").textContent=(gross>=0?"+":"")+"€"+gross.toFixed(2);
   document.getElementById("crTax").textContent="-€"+tax.toFixed(2);
+  document.getElementById("crDays").textContent=days;
   document.getElementById("crIvafe").textContent="-€"+ivafe.toFixed(2);
   document.getElementById("crFx").textContent="-€"+fx.toFixed(2);
   document.getElementById("crWith").textContent="-€"+withCost.toFixed(2);
