@@ -1,0 +1,17 @@
+name = "trading-bot"
+main = "src/worker.js"
+compatibility_date = "2024-12-01"
+
+# Cron trigger: ogni 5 minuti
+[triggers]
+crons = ["*/5 * * * *"]
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "trading-bot"
+database_id = "01c362d9-5c02-458c-9240-200c105d025b"
+
+# Alpaca API Keys (aggiungi con: npx wrangler secret put ALPACA_KEY)
+# ALPACA_KEY = "tua api key"       → wrangler secret put ALPACA_KEY
+# ALPACA_SECRET = "tua secret key" → wrangler secret put ALPACA_SECRET
