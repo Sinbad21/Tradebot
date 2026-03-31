@@ -108,26 +108,40 @@ async function fetchBarsAlpaca(ticker, env, limit = 100) {
 
 async function fetchLatestPrice(ticker, env) {
   const isCrypto = ticker.includes("-USD");
-  if (isCrypto) return null;
 
-  const apiKey = env.ALPACA_KEY;
-  const secret = env.ALPACA_SECRET;
-  if (!apiKey || !secret) return null;
-
-  try {
-    const url = `https://data.alpaca.markets/v2/stocks/${ticker}/trades/latest`;
-    const res = await fetch(url, {
-      headers: {
-        "APCA-API-KEY-ID": apiKey,
-        "APCA-API-SECRET-KEY": secret,
-      },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.trade?.p || null;
-  } catch {
-    return null;
+  // Alpaca real-time per stocks
+  if (!isCrypto) {
+    const apiKey = env.ALPACA_KEY;
+    const secret = env.ALPACA_SECRET;
+    if (apiKey && secret) {
+      try {
+        const url = `https://data.alpaca.markets/v2/stocks/${ticker}/trades/latest`;
+        const res = await fetch(url, {
+          headers: {
+            "APCA-API-KEY-ID": apiKey,
+            "APCA-API-SECRET-KEY": secret,
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.trade?.p) return data.trade.p;
+        }
+      } catch {}
+    }
   }
+
+  // Yahoo fallback (stocks + crypto)
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=1d&interval=5m`;
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (res.ok) {
+      const data = await res.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (meta?.regularMarketPrice) return meta.regularMarketPrice;
+    }
+  } catch {}
+
+  return null;
 }
 
 // Yahoo Finance (fallback per tutto, primario per crypto)
@@ -520,17 +534,20 @@ async function scan(db, env) {
   for (const pos of positions) {
     const bars = await fetchBars(pos.ticker, env, "5d", "1d");
     if (bars.length > 0) {
-      const lastPrice = bars[bars.length - 1].close;
       const high = bars[bars.length - 1].high;
       const low = bars[bars.length - 1].low;
 
-      // Update price
-      await db.prepare("UPDATE positions SET current_price=?, unrealized_pnl=?, unrealized_pct=? WHERE ticker=?")
-        .bind(lastPrice, +((lastPrice - pos.entry_price) * pos.shares).toFixed(2),
-              +((lastPrice - pos.entry_price) / pos.entry_price * 100).toFixed(2), pos.ticker).run();
+      // Get real-time price, fallback to daily close
+      const livePrice = await fetchLatestPrice(pos.ticker, env) || bars[bars.length - 1].close;
 
-      // Trailing stop
-      let highest = Math.max(pos.highest, high);
+      // Update price with real-time data
+      await db.prepare("UPDATE positions SET current_price=?, unrealized_pnl=?, unrealized_pct=? WHERE ticker=?")
+        .bind(livePrice, +((livePrice - pos.entry_price) * pos.shares).toFixed(2),
+              +((livePrice - pos.entry_price) / pos.entry_price * 100).toFixed(2), pos.ticker).run();
+
+      // Trailing stop (use daily high for highest tracking)
+      const effectiveHigh = Math.max(high, livePrice);
+      let highest = Math.max(pos.highest, effectiveHigh);
       let sl = pos.stop_loss;
       let trailingActive = pos.trailing_active;
       const gainPct = (highest - pos.entry_price) / pos.entry_price;
@@ -542,21 +559,21 @@ async function scan(db, env) {
       await db.prepare("UPDATE positions SET highest=?, stop_loss=?, trailing_active=? WHERE ticker=?")
         .bind(highest, sl, trailingActive, pos.ticker).run();
 
-      // Check SL/TP
+      // Check SL/TP using live price
       if (pos.auto_sl) {
-        if (low <= sl) {
+        if (livePrice <= sl || low <= sl) {
           const trade = await closePosition(db, pos.ticker, sl, "stop_loss");
           if (trade) results.closes.push(trade);
           continue;
         }
-        if (high >= pos.take_profit) {
+        if (livePrice >= pos.take_profit || high >= pos.take_profit) {
           const trade = await closePosition(db, pos.ticker, pos.take_profit, "take_profit");
           if (trade) results.closes.push(trade);
           continue;
         }
       }
 
-      results.equity += lastPrice * pos.shares;
+      results.equity += livePrice * pos.shares;
     }
   }
 
@@ -645,14 +662,13 @@ async function handleAPI(request, env) {
     // Fetch live prices for open positions
     for (const pos of positions) {
       try {
-        const bars = await fetchBars(pos.ticker, env, "5d", "1d");
-        if (bars.length > 0) {
-          const lastPrice = bars[bars.length - 1].close;
-          pos.current_price = lastPrice;
-          pos.unrealized_pnl = +((lastPrice - pos.entry_price) * pos.shares).toFixed(2);
-          pos.unrealized_pct = +((lastPrice - pos.entry_price) / pos.entry_price * 100).toFixed(2);
+        const livePrice = await fetchLatestPrice(pos.ticker, env);
+        if (livePrice) {
+          pos.current_price = livePrice;
+          pos.unrealized_pnl = +((livePrice - pos.entry_price) * pos.shares).toFixed(2);
+          pos.unrealized_pct = +((livePrice - pos.entry_price) / pos.entry_price * 100).toFixed(2);
           await db.prepare("UPDATE positions SET current_price=?, unrealized_pnl=?, unrealized_pct=? WHERE ticker=?")
-            .bind(lastPrice, pos.unrealized_pnl, pos.unrealized_pct, pos.ticker).run();
+            .bind(livePrice, pos.unrealized_pnl, pos.unrealized_pct, pos.ticker).run();
         }
       } catch (e) {}
     }
