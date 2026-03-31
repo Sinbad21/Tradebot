@@ -1187,8 +1187,8 @@ tr:hover td{background:var(--card2)}
   <p style="font-size:.78rem;color:var(--text3);margin-bottom:14px">Calcolo automatico per mercato. Tasse e costi applicati in base al tipo di asset.</p>
 
   <div style="display:flex;gap:8px;margin-bottom:14px">
-    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" onclick="setCalcMode(\\'auto\\')" id="calcModeAuto">📊 Auto (da bot)</button>
-    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" onclick="setCalcMode(\\'manual\\')" id="calcModeManual">✏️ Manuale</button>
+    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" id="calcModeAuto">📊 Auto (da bot)</button>
+    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" id="calcModeManual">✏️ Manuale</button>
   </div>
 
   <div id="calcManualFields" style="display:none">
@@ -1452,23 +1452,26 @@ function setCalcMode(mode){
 function getMarketType(ticker){
   if(!ticker) return "us";
   if(ticker.includes("-USD")) return "crypto";
-  if(/\\\\.(MI|DE|PA|AS|L|MC)$/.test(ticker)) return "eu";
+  if(ticker.indexOf(".")!==-1) return "eu";
   return "us";
 }
 
-function calcTaxForMarket(gross, cap, days, market){
+function calcTaxForMarket(gross, investedCap, days, market){
   const taxPct=0.26;
   const tax=Math.max(0,gross)*taxPct;
   let ivafe=0, fx=0, label="";
   if(market==="us"){
-    ivafe=(cap+Math.max(0,gross))*0.002*(days/365);
-    fx=(cap+gross)*0.005;
+    // IVAFE: 0.2% annuo sul valore detenuto all'estero, proporzionale ai giorni
+    ivafe=investedCap*0.002*(days/365);
+    // Spread cambio: solo sul profitto (la conversione avviene al prelievo)
+    fx=Math.abs(gross)*0.005;
     label="🇺🇸 USA";
   } else if(market==="eu"){
     ivafe=0; fx=0;
     label="🇪🇺 EU";
   } else {
-    ivafe=(cap+Math.max(0,gross))*0.002*(days/365);
+    // Crypto: IVAFE su valore detenuto, no spread cambio (già in USD/EUR)
+    ivafe=investedCap*0.002*(days/365);
     fx=0;
     label="🪙 Crypto";
   }
@@ -1482,28 +1485,34 @@ function doCalc(){
 
   if(calcMode==="auto"){
     // Group closed trades by market
-    const groups={us:{gross:0,cap:0,days:30},eu:{gross:0,cap:0,days:30},crypto:{gross:0,cap:0,days:30}};
+    const groups={us:{gross:0,maxCap:0,days:30},eu:{gross:0,maxCap:0,days:30},crypto:{gross:0,maxCap:0,days:30}};
     (lastClosedTrades||[]).forEach(t=>{
       const mkt=getMarketType(t.ticker);
       groups[mkt].gross+=t.pnl||0;
-      groups[mkt].cap+=(t.cost||0);
+      groups[mkt].maxCap=Math.max(groups[mkt].maxCap, t.cost||0);
       if(t.opened_at&&t.closed_at){
         const d=Math.max(1,Math.round((new Date(t.closed_at)-new Date(t.opened_at))/(1000*86400)));
         groups[mkt].days=Math.max(groups[mkt].days,d);
       }
     });
     // Add open positions unrealized P&L
+    let openCapByMkt={us:0,eu:0,crypto:0};
     (lastPositions||[]).forEach(p=>{
       const mkt=getMarketType(p.ticker);
       const cur=p.current_price||p.entry_price;
       groups[mkt].gross+=((cur-p.entry_price)*p.shares);
-      groups[mkt].cap+=(p.cost||0);
+      openCapByMkt[mkt]+=(p.cost||0);
     });
+    // Use max of: largest single trade cost or current open capital, as proxy for invested amount
+    for(const mkt of Object.keys(groups)){
+      groups[mkt].maxCap=Math.max(groups[mkt].maxCap, openCapByMkt[mkt]||0);
+      if(groups[mkt].maxCap===0) groups[mkt].maxCap=lastCapital*0.35; // fallback: max per-position allocation
+    }
 
     for(const [mkt, g] of Object.entries(groups)){
-      if(g.gross===0&&g.cap===0) continue;
-      const r=calcTaxForMarket(g.gross, g.cap, g.days, mkt);
-      totalGross+=g.gross; totalTax+=r.tax; totalIvafe+=r.ivafe; totalFx+=r.fx; totalNet+=r.net; totalCap+=g.cap;
+      if(g.gross===0&&g.maxCap===0) continue;
+      const r=calcTaxForMarket(g.gross, g.maxCap, g.days, mkt);
+      totalGross+=g.gross; totalTax+=r.tax; totalIvafe+=r.ivafe; totalFx+=r.fx; totalNet+=r.net; totalCap+=g.maxCap;
       rows+='<div style="margin-bottom:12px;padding:10px;background:var(--card2);border-radius:8px;border:1px solid var(--border)">'
         +'<div style="font-weight:700;margin-bottom:6px;font-size:.85rem">'+r.label+'</div>'
         +'<div class="modal-row"><span>Profitto lordo</span><span class="mono">'+fmt(g.gross)+'</span></div>'
@@ -1540,6 +1549,8 @@ function fmt(v){return (v>=0?"+":"")+"\u20ac"+v.toFixed(2);}
 // Close modal on bg click
 document.getElementById("calcModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideCalc();});
 document.getElementById("settingsModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideSettings();});
+document.getElementById("calcModeAuto").addEventListener("click",()=>setCalcMode("auto"));
+document.getElementById("calcModeManual").addEventListener("click",()=>setCalcMode("manual"));
 
 // Settings
 let settingsMeta={};
