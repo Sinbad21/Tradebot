@@ -845,15 +845,24 @@ tr:hover td{background:#222d42}
 .g{color:var(--green)}.r{color:var(--red)}.y{color:var(--yellow)}.o{color:var(--orange)}.c{color:var(--cyan)}
 
 /* POSITIONS */
-.pos-card{background:var(--card);border-radius:8px;padding:12px 16px;margin-bottom:6px;display:flex;align-items:center;gap:12px;border-left:3px solid var(--border)}
+.pos-wrap{margin-bottom:6px}
+.pos-card{background:var(--card);border-radius:8px;padding:12px 16px;display:flex;align-items:center;gap:12px;border-left:3px solid var(--border)}
 .pos-card.pos-up{border-left-color:var(--green)}
 .pos-card.pos-down{border-left-color:var(--red)}
 .pos-name{font-weight:700;flex:1}
 .pos-detail{font-size:.85rem;color:var(--text2)}
 .pos-pnl{font-weight:700;font-size:1rem;min-width:110px;text-align:right}
 .pos-levels{font-size:.75rem;color:var(--text3)}
+.pos-expand{background:none;border:none;color:var(--accent);cursor:pointer;font-size:1.1rem;padding:4px 6px;transition:transform .2s}
+.pos-expand.open{transform:rotate(180deg)}
 .pos-close{background:var(--card);border:1px solid var(--border);color:var(--text2);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:.75rem}
 .pos-close:hover{background:var(--red);color:#fff;border-color:var(--red)}
+.pos-extra{display:none;background:var(--card2);border-radius:0 0 8px 8px;padding:10px 16px;margin-top:-2px;border-left:3px solid var(--border);font-size:.82rem;color:var(--text2)}
+.pos-extra.show{display:block}
+.pos-extra-row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1c2333}
+.pos-extra-row:last-child{border-bottom:none}
+.pos-extra-label{color:var(--text3)}
+.pos-extra-val{font-family:'Consolas',monospace}
 
 .empty-state{background:var(--card);border-radius:8px;padding:24px;text-align:center;color:var(--text3)}
 
@@ -1077,18 +1086,31 @@ async function load(){
     if(!d.positions.length){
       pc.innerHTML='<div class="empty-state">Nessuna posizione aperta<br><span style="font-size:.8rem">Il bot aprirà posizioni quando trova segnali</span></div>';
     } else {
-      pc.innerHTML=d.positions.map(p=>{
+      pc.innerHTML=d.positions.map((p,i)=>{
         const cur=p.current_price||p.entry_price;
         const pl=((cur-p.entry_price)*p.shares);
         const pct=((cur-p.entry_price)/p.entry_price*100);
         const up=pl>=0;
         const trail=p.trailing_active?" ⬆":"";
-        return '<div class="pos-card '+(up?"pos-up":"pos-down")+'">'
+        const sh=p.shares%1===0?p.shares:p.shares.toFixed(4);
+        const curVal=(cur*p.shares);
+        const opened=p.opened_at?new Date(p.opened_at).toLocaleString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
+        const indicators=(p.brain_indicators||[]).join(", ")||"—";
+        return '<div class="pos-wrap"><div class="pos-card '+(up?"pos-up":"pos-down")+'">'
+          +'<button class="pos-expand" onclick="togglePos('+i+')" id="posExp'+i+'">▼</button>'
           +'<div class="pos-name">'+p.name+trail+'</div>'
-          +'<div class="pos-detail mono">'+(p.shares%1===0?p.shares:p.shares.toFixed(4))+'sh &middot; $'+p.entry_price.toFixed(2)+' &rarr; $'+cur.toFixed(2)+'</div>'
+          +'<div class="pos-detail mono">'+sh+'sh &middot; $'+p.entry_price.toFixed(2)+' &rarr; $'+cur.toFixed(2)+'</div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
           +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
-          +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')">Chiudi</button></div>';
+          +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')">Chiudi</button></div>'
+          +'<div class="pos-extra" id="posExtra'+i+'">'
+          +'<div class="pos-extra-row"><span class="pos-extra-label">Costo apertura</span><span class="pos-extra-val">€'+p.cost.toFixed(2)+'</span></div>'
+          +'<div class="pos-extra-row"><span class="pos-extra-label">Valore attuale</span><span class="pos-extra-val '+(up?"g":"r")+'">€'+curVal.toFixed(2)+'</span></div>'
+          +'<div class="pos-extra-row"><span class="pos-extra-label">Aperta il</span><span class="pos-extra-val">'+opened+'</span></div>'
+          +'<div class="pos-extra-row"><span class="pos-extra-label">Score ingresso</span><span class="pos-extra-val">'+(p.score_at_entry||0).toFixed(1)+'</span></div>'
+          +'<div class="pos-extra-row"><span class="pos-extra-label">Trailing Stop</span><span class="pos-extra-val">'+(p.trailing_active?"<span class=g>Attivo ⬆</span>":"No")+'</span></div>'
+          +'<div class="pos-extra-row"><span class="pos-extra-label">Indicatori</span><span class="pos-extra-val" style="font-size:.75rem">'+indicators+'</span></div>'
+          +'</div></div>';
       }).join("");
     }
 
@@ -1170,6 +1192,12 @@ function addLog(msg,type){
   const box=document.getElementById("logBox");
   box.innerHTML=logs.map(l=>'<div class="log-'+(l.type||"")+'">'+l.t+" "+l.msg+"</div>").join("");
   box.scrollTop=box.scrollHeight;
+}
+
+function togglePos(i){
+  const extra=document.getElementById("posExtra"+i);
+  const btn=document.getElementById("posExp"+i);
+  if(extra){extra.classList.toggle("show");btn.classList.toggle("open");}
 }
 
 async function doScan(){
