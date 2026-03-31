@@ -809,15 +809,16 @@ async function handleAPI(request, env) {
     }
 
     let equity = capital;
-    positions.forEach((p) => { equity += (p.current_price || p.entry_price) * p.shares; });
+    positions.forEach((p) => { equity += (p.current_price || p.entry_price) * (p.shares || 0); });
 
     const wins = closedTrades.filter((t) => t.pnl > 0).length;
     const totalClosed = closedTrades.length;
+    const cfg = await getSettings(db);
 
     return json({
-      capital: +capital.toFixed(2),
-      equity: +equity.toFixed(2),
-      pnl: +(equity - (await getSettings(db)).initial_capital).toFixed(2),
+      capital: +(capital || 0).toFixed(2),
+      equity: +(equity || 0).toFixed(2),
+      pnl: +((equity || 0) - cfg.initial_capital).toFixed(2),
       dataSource: env.ALPACA_KEY ? "ALPACA + Yahoo" : "Yahoo Finance",
       positions: positions.map((p) => ({
         ...p,
@@ -829,7 +830,7 @@ async function handleAPI(request, env) {
       brain: { weights, totalTrained, confidence: Math.min(totalTrained / 100 * 100, 100) },
       stats: { total: totalClosed, wins, wr: totalClosed > 0 ? +(wins / totalClosed * 100).toFixed(1) : 0 },
       recentScores: recentLogs,
-      maxPositions: (await getSettings(db)).max_positions,
+      maxPositions: cfg.max_positions,
     });
     } catch (e) {
       return json({ error: e.message, stack: e.stack }, 500);
@@ -1277,6 +1278,7 @@ async function load(){
     const r=await fetch(API+"/status");
     if(r.status===401){window.location.href="/login";return;}
     const d=await r.json();bar.style.width="80%";
+    if(d.error){addLog("❌ Status: "+d.error,"sell");bar.style.width="0";return;}
 
     // Source
     document.getElementById("srcName").textContent=d.dataSource||"Yahoo";
