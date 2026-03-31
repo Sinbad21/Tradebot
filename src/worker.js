@@ -21,6 +21,7 @@ const CONFIG_DEFAULTS = {
   min_weight: 0.05,
   max_weight: 2.0,
   min_trades_to_learn: 5,
+  spread_slippage_pct: 0.001,
 };
 
 const CONFIG_META = {
@@ -35,6 +36,7 @@ const CONFIG_META = {
   min_weight: { label: "Brain peso minimo", type: "number", step: 0.01 },
   max_weight: { label: "Brain peso massimo", type: "number", step: 0.1 },
   min_trades_to_learn: { label: "Min trade per apprendere", type: "number", step: 1 },
+  spread_slippage_pct: { label: "Spread/Slippage (%)", type: "number", step: 0.0005, pct: true },
 };
 
 async function getSettings(db) {
@@ -62,11 +64,17 @@ const INITIAL_CAPITAL = CONFIG_DEFAULTS.initial_capital;
 // WATCHLIST
 // ─────────────────────────────────────
 const WATCHLIST = {
-  // Stocks
+  // US Stocks
   NVDA: "NVIDIA", AAPL: "Apple", TSLA: "Tesla", META: "Meta",
   AMZN: "Amazon", MSFT: "Microsoft", GOOGL: "Alphabet",
   JPM: "JPMorgan", XOM: "ExxonMobil",
   GLD: "Gold ETF", SPY: "S&P 500", QQQ: "Nasdaq 100",
+  // EU Stocks (Milano, Francoforte, Parigi, Amsterdam)
+  "ENI.MI": "ENI", "ISP.MI": "Intesa Sanpaolo", "UCG.MI": "UniCredit",
+  "ENEL.MI": "Enel", "STLAM.MI": "Stellantis",
+  "SAP.DE": "SAP", "SIE.DE": "Siemens", "BAS.DE": "BASF",
+  "MC.PA": "LVMH", "OR.PA": "L'Or\u00e9al", "TTE.PA": "TotalEnergies",
+  "ASML.AS": "ASML",
   // Crypto
   "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana",
   "XRP-USD": "XRP", "DOGE-USD": "Dogecoin", "ADA-USD": "Cardano",
@@ -80,7 +88,8 @@ const WATCHLIST = {
 async function fetchBarsAlpaca(ticker, env, limit = 100) {
   // Crypto su Alpaca usa formato diverso (BTC/USD non BTC-USD)
   const isCrypto = ticker.includes("-USD");
-  if (isCrypto) return []; // Alpaca crypto ha endpoint diverso, usiamo Yahoo
+  const isEU = /\.(MI|DE|PA|AS|L|MC)$/.test(ticker);
+  if (isCrypto || isEU) return []; // Solo azioni USA su Alpaca
 
   const apiKey = env.ALPACA_KEY;
   const secret = env.ALPACA_SECRET;
@@ -108,9 +117,10 @@ async function fetchBarsAlpaca(ticker, env, limit = 100) {
 
 async function fetchLatestPrice(ticker, env) {
   const isCrypto = ticker.includes("-USD");
+  const isEU = /\.(MI|DE|PA|AS|L|MC)$/.test(ticker);
 
-  // Alpaca real-time per stocks
-  if (!isCrypto) {
+  // Alpaca real-time per US stocks only
+  if (!isCrypto && !isEU) {
     const apiKey = env.ALPACA_KEY;
     const secret = env.ALPACA_SECRET;
     if (apiKey && secret) {
@@ -468,32 +478,37 @@ async function openPosition(db, ticker, name, price, atr, score, activeInd) {
     if (shares < 1) return null;
   }
 
-  const cost = shares * price;
-  const sl = +(price - slDist).toFixed(2);
-  const tp = +(price + slDist * 2).toFixed(2);
+  // Simulate buy at ask (price + spread/slippage)
+  const execPrice = +(price * (1 + cfg.spread_slippage_pct)).toFixed(4);
+  const cost = +(shares * execPrice).toFixed(2);
+  const sl = +(execPrice - slDist).toFixed(2);
+  const tp = +(execPrice + slDist * 2).toFixed(2);
 
   await db.prepare(
     `INSERT INTO positions (ticker,name,entry_price,shares,stop_loss,take_profit,highest,cost,opened_at,score_at_entry,current_price,brain_indicators)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(ticker, name, price, shares, sl, tp, price, cost, new Date().toISOString(), score, price, JSON.stringify(activeInd)).run();
+  ).bind(ticker, name, execPrice, shares, sl, tp, execPrice, cost, new Date().toISOString(), score, execPrice, JSON.stringify(activeInd)).run();
 
   await setCapital(db, capital - cost);
-  return { ticker, name, shares, entry_price: price, stop_loss: sl, take_profit: tp, cost };
+  return { ticker, name, shares, entry_price: execPrice, stop_loss: sl, take_profit: tp, cost };
 }
 
 async function closePosition(db, ticker, price, reason) {
   const pos = await db.prepare("SELECT * FROM positions WHERE ticker=?").bind(ticker).first();
   if (!pos) return null;
 
-  const revenue = pos.shares * price;
+  // Simulate sell at bid (price - spread/slippage)
+  const cfg = await getSettings(db);
+  const execPrice = +(price * (1 - cfg.spread_slippage_pct)).toFixed(4);
+  const revenue = pos.shares * execPrice;
   const pnl = +(revenue - pos.cost).toFixed(2);
-  const pnlPct = +((price - pos.entry_price) / pos.entry_price * 100).toFixed(2);
+  const pnlPct = +((execPrice - pos.entry_price) / pos.entry_price * 100).toFixed(2);
 
   // Save closed trade
   await db.prepare(
     `INSERT INTO closed_trades (ticker,name,entry_price,exit_price,shares,cost,revenue,pnl,pnl_pct,reason,opened_at,closed_at,brain_indicators)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(pos.ticker, pos.name, pos.entry_price, price, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators).run();
+  ).bind(pos.ticker, pos.name, pos.entry_price, execPrice, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators).run();
 
   // Brain learn
   let brainMsg = "";
@@ -867,23 +882,24 @@ async function handleAPI(request, env) {
 const LOGIN_HTML = `<!DOCTYPE html>
 <html lang="it"><head><meta charset="utf-8"><title>Trading Bot — Login</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#111827;--card:#1f2937;--border:#374151;--text:#f3f4f6;--text2:#9ca3af;--text3:#6b7280;--accent:#a78bfa;--red:#f87171;--green:#34d399}
+:root{--bg:#0b0f19;--card:#151c2c;--border:#252e42;--text:#eef0f6;--text2:#94a3b8;--text3:#64748b;--accent:#8b5cf6;--red:#ef4444;--green:#10b981}
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.login-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:32px;width:360px;max-width:90vw;text-align:center}
-.login-box h1{font-size:1.3rem;margin-bottom:4px;display:flex;align-items:center;justify-content:center;gap:8px}
-.login-box h1 span{color:var(--accent);font-size:1.5rem}
-.login-sub{color:var(--text3);font-size:.85rem;margin-bottom:20px}
-.login-input{width:100%;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:1rem;margin-bottom:12px;outline:none}
+body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:36px;width:380px;max-width:90vw;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.4)}
+.login-box h1{font-size:1.2rem;margin-bottom:6px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800}
+.login-box h1 .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
+.login-sub{color:var(--text3);font-size:.82rem;margin-bottom:24px}
+.login-input{width:100%;padding:14px 16px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:.95rem;margin-bottom:14px;outline:none;font-family:'Inter',sans-serif;transition:border-color .15s}
 .login-input:focus{border-color:var(--accent)}
-.login-btn{width:100%;padding:12px;background:var(--accent);color:#0a0e1a;border:none;border-radius:6px;font-size:1rem;font-weight:700;cursor:pointer}
-.login-btn:hover{filter:brightness(1.15)}
-.login-btn:disabled{opacity:.5;cursor:wait}
-.login-err{color:var(--red);font-size:.85rem;margin-top:8px;display:none}
+.login-btn{width:100%;padding:14px;background:linear-gradient(135deg,var(--accent),#7c3aed);color:#fff;border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;transition:all .15s;box-shadow:0 4px 16px rgba(139,92,246,.3)}
+.login-btn:hover{filter:brightness(1.1);transform:translateY(-1px);box-shadow:0 6px 24px rgba(139,92,246,.4)}
+.login-btn:disabled{opacity:.5;cursor:wait;transform:none}
+.login-err{color:var(--red);font-size:.82rem;margin-top:10px;display:none;font-weight:600}
 </style></head><body>
 <div class="login-box">
-  <h1><span>◉</span> Trading Bot</h1>
+  <h1><span class="dot"></span> Trading Bot</h1>
   <p class="login-sub">Inserisci la password per accedere</p>
   <form onsubmit="doLogin(event)">
     <input type="password" class="login-input" id="loginPwd" placeholder="Password" autocomplete="current-password" autofocus>
@@ -916,127 +932,150 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="it"><head><meta charset="utf-8"><title>Trading Bot — Monitor</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-:root{--bg:#111827;--bg2:#1a2234;--card:#1f2937;--card2:#1a2438;--border:#374151;--text:#f3f4f6;--text2:#9ca3af;--text3:#6b7280;
---green:#34d399;--red:#f87171;--blue:#60a5fa;--yellow:#fbbf24;--orange:#fb923c;--accent:#a78bfa;--cyan:#22d3ee}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+:root{--bg:#0b0f19;--bg2:#111827;--card:#151c2c;--card2:#1a2236;--card3:#1e2740;--border:#252e42;--border2:#2d3a52;
+--text:#eef0f6;--text2:#94a3b8;--text3:#64748b;--text4:#475569;
+--green:#10b981;--green2:#059669;--red:#ef4444;--red2:#dc2626;--blue:#3b82f6;--yellow:#eab308;--orange:#f97316;
+--accent:#8b5cf6;--accent2:#7c3aed;--cyan:#06b6d4;--pink:#ec4899;
+--glow-green:0 0 20px rgba(16,185,129,.15);--glow-red:0 0 20px rgba(239,68,68,.15);--glow-accent:0 0 20px rgba(139,92,246,.15)}
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased}
 
 /* TOP BAR */
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--border)}
-.logo{display:flex;align-items:center;gap:8px}
-.logo-dot{color:var(--accent);font-size:1.4rem}
-.logo-text{font-size:1.1rem;font-weight:700}
-.logo-ver{color:var(--text3);font-size:.75rem}
-.top-right{display:flex;align-items:center;gap:16px}
-.source{display:flex;align-items:center;gap:4px;font-size:.8rem;color:var(--text2)}
-.source .dot{font-size:.6rem}
-.pill{font-size:.7rem;padding:3px 10px;border-radius:12px;font-weight:600}
-.pill-open{background:#0a3320;color:var(--green)}
-.pill-closed{background:#1a1020;color:var(--red)}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 24px;background:var(--bg2);border-bottom:1px solid var(--border);backdrop-filter:blur(12px);position:sticky;top:0;z-index:50}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-dot{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.logo-text{font-size:1rem;font-weight:800;letter-spacing:.5px;background:linear-gradient(135deg,var(--accent),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.logo-ver{color:var(--text4);font-size:.7rem;font-weight:500;background:var(--card);padding:2px 8px;border-radius:4px}
+.top-right{display:flex;align-items:center;gap:14px}
+.source{display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--text2);background:var(--card);padding:4px 12px;border-radius:6px}
+.source .dot{font-size:.5rem}
+.pill{font-size:.65rem;padding:4px 12px;border-radius:20px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
+.pill-open{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.pill-closed{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2)}
 
 /* LAYOUT */
-.main{display:flex;gap:0;min-height:calc(100vh - 55px)}
-.content{flex:1;padding:16px 20px;overflow-y:auto}
-.sidebar{width:210px;background:var(--bg2);padding:16px;border-left:1px solid var(--border);flex-shrink:0}
+.main{display:flex;gap:0;min-height:calc(100vh - 49px)}
+.content{flex:1;padding:20px 24px;overflow-y:auto}
+.sidebar{width:220px;background:var(--bg2);padding:16px;border-left:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column;gap:4px}
 
 /* STAT CARDS */
-.stats{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;margin-bottom:16px}
-.stat{background:var(--card);border-radius:8px;padding:14px 16px;border:2px solid var(--border)}
-.stat-equity{border-color:var(--blue)}
-.stat-pnl{border-color:var(--accent)}
-.stat-spy{border-color:var(--cyan)}
-.stat-pos{border-color:var(--orange)}
-.stat-label{font-size:.7rem;color:var(--text2);text-transform:uppercase;display:flex;align-items:center;gap:4px}
-.stat-value{font-size:1.6rem;font-weight:700;margin-top:2px}
-.stat-equity .stat-value{font-size:2rem}
-.stat-sub{font-size:.75rem;color:var(--text3);margin-top:1px}
+.stats{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px}
+.stat{background:var(--card);border-radius:12px;padding:16px 18px;border:1px solid var(--border);position:relative;overflow:hidden;transition:border-color .2s,box-shadow .2s}
+.stat:hover{border-color:var(--border2)}
+.stat::before{content:"";position:absolute;top:0;left:0;right:0;height:2px}
+.stat-equity::before{background:linear-gradient(90deg,var(--blue),var(--cyan))}
+.stat-pnl::before{background:linear-gradient(90deg,var(--accent),var(--pink))}
+.stat-spy::before{background:linear-gradient(90deg,var(--cyan),var(--green))}
+.stat-pos::before{background:linear-gradient(90deg,var(--orange),var(--yellow))}
+.stat-equity:hover{box-shadow:0 0 24px rgba(59,130,246,.1)}
+.stat-pnl:hover{box-shadow:var(--glow-accent)}
+.stat-label{font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:600;display:flex;align-items:center;gap:6px}
+.stat-value{font-size:1.5rem;font-weight:800;margin-top:6px;font-family:'JetBrains Mono',monospace}
+.stat-equity .stat-value{font-size:1.8rem}
+.stat-sub{font-size:.72rem;color:var(--text4);margin-top:4px;font-weight:500}
 
 /* SECTION HEADERS */
-.section-hdr{font-size:.7rem;color:var(--text3);text-transform:uppercase;margin:16px 0 6px;display:flex;align-items:center;gap:6px}
-.info-i{color:var(--text3);cursor:help;position:relative}
-.info-i:hover::after{content:attr(data-tip);position:absolute;left:16px;top:-4px;background:var(--card);border:1px solid var(--border);color:var(--text2);padding:8px 12px;border-radius:6px;font-size:.75rem;white-space:pre-line;z-index:99;min-width:220px;font-weight:400;line-height:1.4}
+.section-hdr{font-size:.7rem;color:var(--text3);text-transform:uppercase;letter-spacing:1.2px;font-weight:700;margin:24px 0 10px;display:flex;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.info-i{color:var(--text4);cursor:help;position:relative;font-size:.8rem;transition:color .15s}
+.info-i:hover{color:var(--accent)}
+.info-i:hover::after{content:attr(data-tip);position:absolute;left:20px;top:-4px;background:var(--card3);border:1px solid var(--border2);color:var(--text2);padding:10px 14px;border-radius:8px;font-size:.75rem;white-space:pre-line;z-index:99;min-width:240px;font-weight:400;line-height:1.5;box-shadow:0 8px 32px rgba(0,0,0,.4);letter-spacing:0}
 
 /* TABLE */
-table{width:100%;border-collapse:collapse;font-size:.9rem}
-th{text-align:left;font-size:.7rem;color:var(--text2);text-transform:uppercase;padding:8px 12px;background:var(--bg2);border-bottom:1px solid var(--border)}
-td{padding:8px 12px;border-bottom:1px solid #1c2333}
-tr:nth-child(even) td{background:var(--card2)}
-tr:hover td{background:#222d42}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:.85rem}
+th{text-align:left;font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;font-weight:700;padding:10px 14px;background:var(--card);border-bottom:1px solid var(--border)}
+th:first-child{border-radius:8px 0 0 0}th:last-child{border-radius:0 8px 0 0}
+td{padding:10px 14px;border-bottom:1px solid var(--border);transition:background .1s}
+tr:hover td{background:var(--card2)}
 
-.badge{display:inline-block;padding:3px 10px;border-radius:4px;font-weight:700;font-size:.78rem;text-align:center;min-width:90px}
-.b-buy{background:#0a3320;color:var(--green)}
-.b-sell{background:#3a1520;color:var(--red)}
-.b-wait{background:#33290a;color:var(--yellow)}
-.b-hold{background:transparent;color:var(--text3)}
-.b-down{background:#33200a;color:var(--orange)}
-.mono{font-family:'Consolas','Courier New',monospace}
+.badge{display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;border-radius:6px;font-weight:700;font-size:.72rem;letter-spacing:.3px;min-width:90px;gap:4px}
+.b-buy{background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.25)}
+.b-sell{background:rgba(239,68,68,.12);color:var(--red);border:1px solid rgba(239,68,68,.25)}
+.b-wait{background:rgba(234,179,8,.1);color:var(--yellow);border:1px solid rgba(234,179,8,.2)}
+.b-hold{background:var(--card);color:var(--text4);border:1px solid var(--border)}
+.b-down{background:rgba(249,115,22,.1);color:var(--orange);border:1px solid rgba(249,115,22,.2)}
+.mono{font-family:'JetBrains Mono','Consolas',monospace}
 .g{color:var(--green)}.r{color:var(--red)}.y{color:var(--yellow)}.o{color:var(--orange)}.c{color:var(--cyan)}
 
 /* POSITIONS */
-.pos-wrap{margin-bottom:6px}
-.pos-card{background:var(--card);border-radius:8px;padding:12px 16px;display:flex;align-items:center;gap:12px;border-left:3px solid var(--border)}
-.pos-card.pos-up{border-left-color:var(--green)}
-.pos-card.pos-down{border-left-color:var(--red)}
-.pos-name{font-weight:700;flex:1}
-.pos-detail{font-size:.85rem;color:var(--text2)}
-.pos-pnl{font-weight:700;font-size:1rem;min-width:110px;text-align:right}
-.pos-levels{font-size:.75rem;color:var(--text3)}
-.pos-expand{background:none;border:none;color:var(--accent);cursor:pointer;font-size:1.1rem;padding:4px 6px;transition:transform .2s}
+.pos-wrap{margin-bottom:8px}
+.pos-card{background:var(--card);border-radius:10px;padding:14px 18px;display:flex;align-items:center;gap:14px;border-left:3px solid var(--border);transition:all .15s}
+.pos-card:hover{background:var(--card2);transform:translateX(2px)}
+.pos-card.pos-up{border-left-color:var(--green);box-shadow:var(--glow-green)}
+.pos-card.pos-down{border-left-color:var(--red);box-shadow:var(--glow-red)}
+.pos-name{font-weight:700;flex:1;font-size:.95rem}
+.pos-detail{font-size:.8rem;color:var(--text2);font-family:'JetBrains Mono',monospace}
+.pos-pnl{font-weight:800;font-size:1rem;min-width:120px;text-align:right;font-family:'JetBrains Mono',monospace}
+.pos-levels{font-size:.72rem;color:var(--text4)}
+.pos-expand{background:none;border:none;color:var(--accent);cursor:pointer;font-size:1rem;padding:4px 8px;transition:transform .2s;border-radius:4px}
+.pos-expand:hover{background:var(--card3)}
 .pos-expand.open{transform:rotate(180deg)}
-.pos-close{background:var(--card);border:1px solid var(--border);color:var(--text2);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:.75rem}
-.pos-close:hover{background:var(--red);color:#fff;border-color:var(--red)}
-.pos-extra{display:none;background:var(--card2);border-radius:0 0 8px 8px;padding:10px 16px;margin-top:-2px;border-left:3px solid var(--border);font-size:.82rem;color:var(--text2)}
+.pos-close{background:transparent;border:1px solid var(--border);color:var(--text3);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:.72rem;font-weight:600;transition:all .15s}
+.pos-close:hover{background:var(--red);color:#fff;border-color:var(--red);box-shadow:var(--glow-red)}
+.pos-extra{display:none;background:var(--card);border-radius:0 0 10px 10px;padding:12px 18px;margin-top:0;border-left:3px solid var(--border);border-top:1px dashed var(--border);font-size:.8rem;color:var(--text2)}
 .pos-extra.show{display:block}
-.pos-extra-row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1c2333}
+.pos-extra-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)}
 .pos-extra-row:last-child{border-bottom:none}
-.pos-extra-label{color:var(--text3)}
-.pos-extra-val{font-family:'Consolas',monospace}
+.pos-extra-label{color:var(--text3);font-weight:500}
+.pos-extra-val{font-family:'JetBrains Mono',monospace;font-weight:600}
 
-.empty-state{background:var(--card);border-radius:8px;padding:24px;text-align:center;color:var(--text3)}
+.empty-state{background:var(--card);border-radius:10px;padding:32px;text-align:center;color:var(--text4);border:1px dashed var(--border)}
 
 /* SIDEBAR */
-.side-btn{width:100%;padding:10px 12px;border:none;border-radius:6px;cursor:pointer;font-size:.9rem;text-align:left;margin-bottom:4px;transition:background .15s}
-.side-btn:hover{filter:brightness(1.15)}
-.btn-start{background:var(--green);color:#0a0e1a;font-weight:700;font-size:1rem;padding:12px;text-align:center}
-.btn-start:hover{background:#2dd4a0}
-.btn-action{background:var(--card);color:var(--text)}
-.btn-danger{background:var(--card);color:var(--red)}
-.btn-calc{background:var(--card);color:var(--cyan)}
-.btn-settings{background:var(--card);color:var(--accent)}
-.sep{border:none;border-top:1px solid var(--border);margin:10px 0}
-.side-label{font-size:.7rem;color:var(--text3);text-transform:uppercase;margin-bottom:4px}
-.side-stat{font-size:.85rem;color:var(--text2);margin-bottom:2px}
-.brain-section{margin-top:4px}
-.brain-label{color:var(--accent);font-size:.7rem;text-transform:uppercase;margin-bottom:4px}
+.side-btn{width:100%;padding:10px 14px;border:1px solid transparent;border-radius:8px;cursor:pointer;font-size:.85rem;font-weight:600;text-align:left;transition:all .15s;display:flex;align-items:center;gap:8px}
+.side-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.btn-start{background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-size:.95rem;padding:12px 14px;text-align:center;justify-content:center;border-radius:10px;box-shadow:0 4px 16px rgba(16,185,129,.25)}
+.btn-start:hover{box-shadow:0 6px 24px rgba(16,185,129,.35)}
+.btn-action{background:var(--card);color:var(--text2);border-color:var(--border)}
+.btn-action:hover{border-color:var(--border2);color:var(--text)}
+.btn-danger{background:var(--card);color:var(--red);border-color:var(--border)}
+.btn-danger:hover{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3)}
+.btn-calc{background:var(--card);color:var(--cyan);border-color:var(--border)}
+.btn-calc:hover{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3)}
+.btn-settings{background:var(--card);color:var(--accent);border-color:var(--border)}
+.btn-settings:hover{background:rgba(139,92,246,.08);border-color:rgba(139,92,246,.3)}
+.sep{border:none;border-top:1px solid var(--border);margin:8px 0}
+.side-label{font-size:.65rem;color:var(--text4);text-transform:uppercase;letter-spacing:1px;font-weight:700;margin:4px 0}
+.side-stat{font-size:.82rem;color:var(--text2);margin-bottom:3px;font-weight:500}
+.brain-section{margin-top:4px;background:var(--card);border-radius:8px;padding:10px 12px;border:1px solid var(--border)}
+.brain-label{color:var(--accent);font-size:.65rem;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px}
 
 /* LOG */
-.log-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-family:'Consolas',monospace;font-size:.8rem;max-height:180px;overflow-y:auto;color:var(--text2);line-height:1.5}
+.log-box{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-family:'JetBrains Mono',monospace;font-size:.75rem;max-height:200px;overflow-y:auto;color:var(--text2);line-height:1.6}
+.log-box::-webkit-scrollbar{width:4px}.log-box::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
 .log-buy{color:var(--green)}.log-sell{color:var(--red)}.log-warn{color:var(--yellow)}
 
 /* MODAL */
-.modal-bg{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:100;display:none}
-.modal{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:24px;width:480px;max-width:90vw;max-height:90vh;overflow-y:auto}
-.modal h2{font-size:1.2rem;margin-bottom:12px}
-.modal label{display:block;font-size:.85rem;color:var(--text2);margin-top:10px}
-.modal input{width:100%;padding:8px;background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Consolas',monospace;font-size:.9rem;margin-top:4px}
-.modal-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:.9rem}
-.modal-row.total{border-top:2px solid var(--border);border-bottom:none;font-weight:700;font-size:1.05rem;padding-top:10px;margin-top:4px}
+.modal-bg{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:100;display:none}
+.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:28px;width:500px;max-width:92vw;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.5)}
+.modal::-webkit-scrollbar{width:4px}.modal::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+.modal h2{font-size:1.15rem;margin-bottom:14px;font-weight:700}
+.modal label{display:block;font-size:.78rem;color:var(--text3);margin-top:12px;font-weight:600;letter-spacing:.3px}
+.modal input,.modal select{width:100%;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.85rem;margin-top:4px;transition:border-color .15s;outline:none}
+.modal input:focus,.modal select:focus{border-color:var(--accent)}
+.modal-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:.85rem;align-items:center}
+.modal-row.total{border-top:2px solid var(--border2);border-bottom:none;font-weight:800;font-size:1.05rem;padding-top:12px;margin-top:6px}
 
 /* REFRESH INDICATOR */
-.refresh-bar{height:2px;background:var(--accent);position:fixed;top:0;left:0;transition:width .3s;z-index:200}
+.refresh-bar{height:2px;background:linear-gradient(90deg,var(--accent),var(--cyan));position:fixed;top:0;left:0;transition:width .3s;z-index:200}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:6px}
 
 @media(max-width:768px){
-  .main{flex-direction:column}.sidebar{width:100%;border-left:none;border-top:1px solid var(--border)}
-  .stats{grid-template-columns:1fr 1fr}.stat-equity .stat-value{font-size:1.5rem}
+  .main{flex-direction:column}.sidebar{width:100%;border-left:none;border-top:1px solid var(--border);flex-direction:row;flex-wrap:wrap;gap:4px}
+  .stats{grid-template-columns:1fr 1fr}.stat-equity .stat-value{font-size:1.4rem}
+  .content{padding:12px 14px}
 }
 </style></head><body>
 <div class="refresh-bar" id="refreshBar" style="width:0"></div>
 
 <div class="topbar">
   <div class="logo">
-    <span class="logo-dot">◉</span>
-    <span class="logo-text">MONITOR</span>
-    <span class="logo-ver">v3</span>
+    <span class="logo-dot"></span>
+    <span class="logo-text">TRADEBOT</span>
+    <span class="logo-ver">v3.1</span>
   </div>
   <div class="top-right">
     <span class="source"><span class="dot" id="srcDot">●</span> <span id="srcName">...</span></span>
@@ -1075,7 +1114,7 @@ tr:hover td{background:#222d42}
   <div id="posContainer"><div class="empty-state">Nessuna posizione aperta</div></div>
 
   <!-- WATCHLIST -->
-  <div class="section-hdr">Watchlist <span class="info-i" data-tip="12 azioni USA + 6 crypto monitorati\\nOgni 5 min: scarica dati, calcola MACD,\\nRSI, EMA, Bollinger e decide se comprare">ⓘ</span>
+  <div class="section-hdr">Watchlist <span class="info-i" data-tip="Azioni USA + EU + Crypto monitorati\\nOgni 5 min: scarica dati, calcola MACD,\\nRSI, EMA, Bollinger e decide se comprare">ⓘ</span>
     <span style="margin-left:auto;font-size:.7rem;color:var(--text3)" id="scanTime"></span>
   </div>
   <table id="watchlist">
@@ -1145,29 +1184,37 @@ tr:hover td{background:#222d42}
 <div class="modal-bg" id="calcModal">
 <div class="modal">
   <h2>💰 Profitto Netto</h2>
-  <p style="font-size:.8rem;color:var(--text3);margin-bottom:12px">Calcola quanto guadagni dopo tasse e costi (Italia)</p>
-  <label>Profitto lordo (€)</label><input type="number" id="cGross" value="0">
-  <label>Tassa plusvalenze (%)</label><input type="number" id="cTax" value="26">
-  <label>IVAFE annuale (%)</label><input type="number" id="cIvafe" value="0.2">
-  <label>Giorni di detenzione</label><input type="number" id="cDays" value="365" min="1" max="365">
-  <label>Spread cambio EUR/USD (%)</label><input type="number" id="cFx" value="0.5">
-  <label>Costo prelievo (€)</label><input type="number" id="cWith" value="0">
-  <label>Capitale investito (€)</label><input type="number" id="cCap" value="5000">
-  <div style="margin-top:16px;border:2px solid var(--cyan);border-radius:8px;padding:14px" id="calcResults">
-    <div class="modal-row"><span>Profitto lordo</span><span id="crGross">—</span></div>
-    <div class="modal-row"><span class="r">Tassa 26%</span><span id="crTax" class="r">—</span></div>
-    <div class="modal-row"><span class="o">IVAFE 0.2% (<span id="crDays">365</span>gg)</span><span id="crIvafe" class="o">—</span></div>
-    <div class="modal-row"><span class="y">Spread cambio</span><span id="crFx" class="y">—</span></div>
-    <div class="modal-row"><span>Costo prelievo</span><span id="crWith">—</span></div>
-    <div class="modal-row total"><span class="g">PROFITTO NETTO</span><span id="crNet" class="g">—</span></div>
-    <div class="modal-row"><span class="c">Rendimento %</span><span id="crPct" class="c">—</span></div>
-    <div class="modal-row total"><span>Somma che ricevi</span><span id="crTotal">—</span></div>
+  <p style="font-size:.78rem;color:var(--text3);margin-bottom:14px">Calcolo automatico per mercato. Tasse e costi applicati in base al tipo di asset.</p>
+
+  <div style="display:flex;gap:8px;margin-bottom:14px">
+    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" onclick="setCalcMode(\\'auto\\')" id="calcModeAuto">📊 Auto (da bot)</button>
+    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" onclick="setCalcMode(\\'manual\\')" id="calcModeManual">✏️ Manuale</button>
   </div>
+
+  <div id="calcManualFields" style="display:none">
+    <label>Profitto lordo (€)</label><input type="number" id="cGross" value="0">
+    <label>Mercato</label>
+    <select id="cMarket">
+      <option value="us">🇺🇸 USA (Alpaca)</option>
+      <option value="eu">🇪🇺 Europa (MI/DE/PA/AS)</option>
+      <option value="crypto">🪙 Crypto</option>
+    </select>
+    <label>Giorni di detenzione</label><input type="number" id="cDays" value="365" min="1" max="365">
+    <label>Capitale investito (€)</label><input type="number" id="cCap" value="5000">
+  </div>
+
+  <div style="margin-top:16px;border:1px solid var(--border2);border-radius:10px;padding:16px;background:var(--card)" id="calcResults">
+    <div id="calcBreakdown"></div>
+    <div class="modal-row total" style="margin-top:12px"><span class="g">PROFITTO NETTO</span><span id="crNet" class="g" style="font-family:JetBrains Mono,monospace">—</span></div>
+    <div class="modal-row"><span class="c">Rendimento %</span><span id="crPct" class="c" style="font-family:JetBrains Mono,monospace">—</span></div>
+    <div class="modal-row total"><span>Somma che ricevi</span><span id="crTotal" style="font-family:JetBrains Mono,monospace">—</span></div>
+  </div>
+
   <div style="display:flex;gap:8px;margin-top:14px">
     <button class="side-btn btn-start" style="flex:1" onclick="doCalc()">📊 Calcola</button>
     <button class="side-btn btn-action" style="flex:1" onclick="hideCalc()">Chiudi</button>
   </div>
-  <p style="font-size:.7rem;color:var(--text3);margin-top:8px;text-align:center">⚠ Stime indicative — consulta un commercialista</p>
+  <p style="font-size:.68rem;color:var(--text4);margin-top:10px;text-align:center">⚠ Stime indicative — consulta un commercialista per la tua situazione</p>
 </div>
 </div>
 
@@ -1213,6 +1260,9 @@ async function load(){
 
     // Profit calculator default
     document.getElementById("cGross").value=pnl.toFixed(2);
+    lastPositions=d.positions||[];
+    lastClosedTrades=d.closedTrades||[];
+    lastCapital=d.capital||5000;
 
     // Positions
     const pc=document.getElementById("posContainer");
@@ -1386,33 +1436,106 @@ function resetAll(){
 }
 
 // Profit calculator
-function showCalc(){document.getElementById("calcModal").style.display="flex";doCalc();}
+let calcMode="auto";
+let lastPositions=[];let lastClosedTrades=[];let lastCapital=5000;
+function showCalc(){document.getElementById("calcModal").style.display="flex";setCalcMode("auto");}
 function hideCalc(){document.getElementById("calcModal").style.display="none";}
-function doCalc(){
-  const gross=parseFloat(document.getElementById("cGross").value)||0;
-  const taxPct=parseFloat(document.getElementById("cTax").value)/100;
-  const ivafePct=parseFloat(document.getElementById("cIvafe").value)/100;
-  const days=Math.min(365,Math.max(1,parseInt(document.getElementById("cDays").value)||365));
-  const fxPct=parseFloat(document.getElementById("cFx").value)/100;
-  const withCost=parseFloat(document.getElementById("cWith").value)||0;
-  const cap=parseFloat(document.getElementById("cCap").value)||5000;
-  const tax=Math.max(0,gross)*taxPct;
-  const ivafe=(cap+Math.max(0,gross))*ivafePct*(days/365);
-  const fx=(cap+gross)*fxPct;
-  const total=tax+ivafe+fx+withCost;
-  const net=gross-total;
-  const pct=cap>0?(net/cap*100):0;
-  document.getElementById("crGross").textContent=(gross>=0?"+":"")+"€"+gross.toFixed(2);
-  document.getElementById("crTax").textContent="-€"+tax.toFixed(2);
-  document.getElementById("crDays").textContent=days;
-  document.getElementById("crIvafe").textContent="-€"+ivafe.toFixed(2);
-  document.getElementById("crFx").textContent="-€"+fx.toFixed(2);
-  document.getElementById("crWith").textContent="-€"+withCost.toFixed(2);
-  document.getElementById("crNet").textContent=(net>=0?"+":"")+"€"+net.toFixed(2);
-  document.getElementById("crNet").className=net>=0?"g":"r";
-  document.getElementById("crPct").textContent=pct.toFixed(2)+"%";
-  document.getElementById("crTotal").textContent="€"+(cap+net).toFixed(2);
+
+function setCalcMode(mode){
+  calcMode=mode;
+  document.getElementById("calcModeAuto").style.borderColor=mode==="auto"?"var(--accent)":"var(--border)";
+  document.getElementById("calcModeManual").style.borderColor=mode==="manual"?"var(--accent)":"var(--border)";
+  document.getElementById("calcManualFields").style.display=mode==="manual"?"block":"none";
+  doCalc();
 }
+
+function getMarketType(ticker){
+  if(!ticker) return "us";
+  if(ticker.includes("-USD")) return "crypto";
+  if(/\\\\.(MI|DE|PA|AS|L|MC)$/.test(ticker)) return "eu";
+  return "us";
+}
+
+function calcTaxForMarket(gross, cap, days, market){
+  const taxPct=0.26;
+  const tax=Math.max(0,gross)*taxPct;
+  let ivafe=0, fx=0, label="";
+  if(market==="us"){
+    ivafe=(cap+Math.max(0,gross))*0.002*(days/365);
+    fx=(cap+gross)*0.005;
+    label="🇺🇸 USA";
+  } else if(market==="eu"){
+    ivafe=0; fx=0;
+    label="🇪🇺 EU";
+  } else {
+    ivafe=(cap+Math.max(0,gross))*0.002*(days/365);
+    fx=0;
+    label="🪙 Crypto";
+  }
+  return {tax, ivafe, fx, total: tax+ivafe+fx, net: gross-tax-ivafe-fx, label, market};
+}
+
+function doCalc(){
+  const bd=document.getElementById("calcBreakdown");
+  let totalGross=0, totalTax=0, totalIvafe=0, totalFx=0, totalNet=0, totalCap=0;
+  let rows="";
+
+  if(calcMode==="auto"){
+    // Group closed trades by market
+    const groups={us:{gross:0,cap:0,days:30},eu:{gross:0,cap:0,days:30},crypto:{gross:0,cap:0,days:30}};
+    (lastClosedTrades||[]).forEach(t=>{
+      const mkt=getMarketType(t.ticker);
+      groups[mkt].gross+=t.pnl||0;
+      groups[mkt].cap+=(t.cost||0);
+      if(t.opened_at&&t.closed_at){
+        const d=Math.max(1,Math.round((new Date(t.closed_at)-new Date(t.opened_at))/(1000*86400)));
+        groups[mkt].days=Math.max(groups[mkt].days,d);
+      }
+    });
+    // Add open positions unrealized P&L
+    (lastPositions||[]).forEach(p=>{
+      const mkt=getMarketType(p.ticker);
+      const cur=p.current_price||p.entry_price;
+      groups[mkt].gross+=((cur-p.entry_price)*p.shares);
+      groups[mkt].cap+=(p.cost||0);
+    });
+
+    for(const [mkt, g] of Object.entries(groups)){
+      if(g.gross===0&&g.cap===0) continue;
+      const r=calcTaxForMarket(g.gross, g.cap, g.days, mkt);
+      totalGross+=g.gross; totalTax+=r.tax; totalIvafe+=r.ivafe; totalFx+=r.fx; totalNet+=r.net; totalCap+=g.cap;
+      rows+='<div style="margin-bottom:12px;padding:10px;background:var(--card2);border-radius:8px;border:1px solid var(--border)">'
+        +'<div style="font-weight:700;margin-bottom:6px;font-size:.85rem">'+r.label+'</div>'
+        +'<div class="modal-row"><span>Profitto lordo</span><span class="mono">'+fmt(g.gross)+'</span></div>'
+        +'<div class="modal-row"><span class="r">Tassa 26%</span><span class="mono r">-€'+r.tax.toFixed(2)+'</span></div>';
+      if(r.ivafe>0) rows+='<div class="modal-row"><span class="o">IVAFE 0.2% ('+g.days+'gg)</span><span class="mono o">-€'+r.ivafe.toFixed(2)+'</span></div>';
+      if(r.fx>0) rows+='<div class="modal-row"><span class="y">Spread cambio</span><span class="mono y">-€'+r.fx.toFixed(2)+'</span></div>';
+      rows+='<div class="modal-row" style="font-weight:700"><span>Netto '+r.label+'</span><span class="mono '+((r.net>=0)?"g":"r")+'">'+fmt(r.net)+'</span></div></div>';
+    }
+    if(!rows) rows='<div style="text-align:center;color:var(--text4);padding:16px">Nessun trade da calcolare.<br>Esegui uno scan o inserisci dati manualmente.</div>';
+    totalCap=totalCap||lastCapital;
+  } else {
+    const gross=parseFloat(document.getElementById("cGross").value)||0;
+    const market=document.getElementById("cMarket").value;
+    const days=Math.min(365,Math.max(1,parseInt(document.getElementById("cDays").value)||365));
+    const cap=parseFloat(document.getElementById("cCap").value)||5000;
+    const r=calcTaxForMarket(gross, cap, days, market);
+    totalGross=gross; totalTax=r.tax; totalIvafe=r.ivafe; totalFx=r.fx; totalNet=r.net; totalCap=cap;
+    rows='<div class="modal-row"><span>Profitto lordo</span><span class="mono">'+fmt(gross)+'</span></div>'
+      +'<div class="modal-row"><span class="r">Tassa 26%</span><span class="mono r">-€'+r.tax.toFixed(2)+'</span></div>';
+    if(r.ivafe>0) rows+='<div class="modal-row"><span class="o">IVAFE 0.2% ('+days+'gg)</span><span class="mono o">-€'+r.ivafe.toFixed(2)+'</span></div>';
+    if(r.fx>0) rows+='<div class="modal-row"><span class="y">Spread cambio 0.5%</span><span class="mono y">-€'+r.fx.toFixed(2)+'</span></div>';
+  }
+
+  bd.innerHTML=rows;
+  const pct=totalCap>0?(totalNet/totalCap*100):0;
+  document.getElementById("crNet").textContent=fmt(totalNet);
+  document.getElementById("crNet").className=totalNet>=0?"g":"r";
+  document.getElementById("crPct").textContent=pct.toFixed(2)+"%";
+  document.getElementById("crTotal").textContent="€"+(totalCap+totalNet).toFixed(2);
+}
+
+function fmt(v){return (v>=0?"+":"")+"\u20ac"+v.toFixed(2);}
 
 // Close modal on bg click
 document.getElementById("calcModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideCalc();});
@@ -1461,7 +1584,7 @@ async function saveSettings(){
 async function resetSettings(){
   if(!confirm("Ripristinare tutte le impostazioni ai valori default?"))return;
   try{
-    const defaults={initial_capital:5000,max_positions:3,risk_per_trade:0.02,stop_loss_pct:0.025,trailing_activation:0.015,trailing_distance:0.012,cooldown_minutes:30,learn_rate:0.05,min_weight:0.05,max_weight:2.0,min_trades_to_learn:5};
+    const defaults={initial_capital:5000,max_positions:3,risk_per_trade:0.02,stop_loss_pct:0.025,trailing_activation:0.015,trailing_distance:0.012,cooldown_minutes:30,learn_rate:0.05,min_weight:0.05,max_weight:2.0,min_trades_to_learn:5,spread_slippage_pct:0.001};
     const r=await fetch(API+"/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(defaults)});
     const d=await r.json();
     if(d.success){addLog("⚙️ Settings ripristinati ai default","buy");showSettings();}
