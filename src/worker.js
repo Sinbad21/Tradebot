@@ -7,19 +7,56 @@
  */
 
 // ─────────────────────────────────────
-// CONFIG
+// CONFIG DEFAULTS (overridable via DB)
 // ─────────────────────────────────────
-const INITIAL_CAPITAL = 5000;
-const MAX_POSITIONS = 3;
-const RISK_PER_TRADE = 0.02;
-const STOP_LOSS_PCT = 0.025;
-const TRAILING_ACTIVATION = 0.015;
-const TRAILING_DISTANCE = 0.012;
-const COOLDOWN_MINUTES = 30;
-const LEARN_RATE = 0.05;
-const MIN_WEIGHT = 0.05;
-const MAX_WEIGHT = 2.0;
-const MIN_TRADES_TO_LEARN = 5;
+const CONFIG_DEFAULTS = {
+  initial_capital: 5000,
+  max_positions: 3,
+  risk_per_trade: 0.02,
+  stop_loss_pct: 0.025,
+  trailing_activation: 0.015,
+  trailing_distance: 0.012,
+  cooldown_minutes: 30,
+  learn_rate: 0.05,
+  min_weight: 0.05,
+  max_weight: 2.0,
+  min_trades_to_learn: 5,
+};
+
+const CONFIG_META = {
+  initial_capital: { label: "Capitale iniziale (€)", type: "number", step: 100 },
+  max_positions: { label: "Max posizioni aperte", type: "number", step: 1 },
+  risk_per_trade: { label: "Rischio per trade (%)", type: "number", step: 0.005, pct: true },
+  stop_loss_pct: { label: "Stop Loss (%)", type: "number", step: 0.005, pct: true },
+  trailing_activation: { label: "Trailing attivazione (%)", type: "number", step: 0.005, pct: true },
+  trailing_distance: { label: "Trailing distanza (%)", type: "number", step: 0.005, pct: true },
+  cooldown_minutes: { label: "Cooldown (minuti)", type: "number", step: 5 },
+  learn_rate: { label: "Brain learn rate", type: "number", step: 0.01 },
+  min_weight: { label: "Brain peso minimo", type: "number", step: 0.01 },
+  max_weight: { label: "Brain peso massimo", type: "number", step: 0.1 },
+  min_trades_to_learn: { label: "Min trade per apprendere", type: "number", step: 1 },
+};
+
+async function getSettings(db) {
+  const rows = (await db.prepare("SELECT key, value FROM config WHERE key LIKE 'cfg_%'").all()).results || [];
+  const settings = { ...CONFIG_DEFAULTS };
+  for (const r of rows) {
+    const k = r.key.replace('cfg_', '');
+    if (k in CONFIG_DEFAULTS) settings[k] = parseFloat(r.value);
+  }
+  return settings;
+}
+
+async function saveSetting(db, key, value) {
+  if (!(key in CONFIG_DEFAULTS)) return false;
+  const v = parseFloat(value);
+  if (isNaN(v)) return false;
+  await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind('cfg_' + key, v.toString()).run();
+  return true;
+}
+
+// Backward compat — still used in getCapital default
+const INITIAL_CAPITAL = CONFIG_DEFAULTS.initial_capital;
 
 // ─────────────────────────────────────
 // WATCHLIST
@@ -320,7 +357,9 @@ function generateSignal(row, prev, spyRow, weights) {
 // ─────────────────────────────────────
 async function getCapital(db) {
   const r = await db.prepare("SELECT value FROM config WHERE key='capital'").first();
-  return r ? parseFloat(r.value) : INITIAL_CAPITAL;
+  if (r) return parseFloat(r.value);
+  const cfg = await getSettings(db);
+  return cfg.initial_capital;
 }
 
 async function setCapital(db, val) {
@@ -356,17 +395,18 @@ async function brainLearn(db, indicators, pnl, pnlPct) {
   await db.prepare("INSERT INTO brain_history (indicators, pnl, pnl_pct, created_at) VALUES (?,?,?,?)")
     .bind(JSON.stringify(indicators), pnl, pnlPct, new Date().toISOString()).run();
 
-  if (totalTrained < MIN_TRADES_TO_LEARN) return `Trade ${totalTrained}/${MIN_TRADES_TO_LEARN} — raccolta dati`;
+  const cfg = await getSettings(db);
+  if (totalTrained < cfg.min_trades_to_learn) return `Trade ${totalTrained}/${cfg.min_trades_to_learn} — raccolta dati`;
 
   const isWin = pnl > 0;
   const magnitude = Math.min(Math.abs(pnlPct) / 5, 1.0);
-  const delta = LEARN_RATE * magnitude;
+  const delta = cfg.learn_rate * magnitude;
   const adjustments = [];
 
   for (const ind of indicators) {
     const row = await db.prepare("SELECT weight FROM brain WHERE indicator=?").bind(ind).first();
     if (!row) continue;
-    let newW = isWin ? Math.min(row.weight + delta, MAX_WEIGHT) : Math.max(row.weight - delta, MIN_WEIGHT);
+    let newW = isWin ? Math.min(row.weight + delta, cfg.max_weight) : Math.max(row.weight - delta, cfg.min_weight);
     await db.prepare("UPDATE brain SET weight=? WHERE indicator=?").bind(+newW.toFixed(4), ind).run();
     adjustments.push(`${ind}${isWin ? "+" : "-"}${delta.toFixed(3)}`);
   }
@@ -378,7 +418,7 @@ async function brainLearn(db, indicators, pnl, pnlPct) {
     for (const ind of inactive) {
       const row = await db.prepare("SELECT weight FROM brain WHERE indicator=?").bind(ind).first();
       if (row) {
-        const newW = Math.min(row.weight + LEARN_RATE * 0.3, MAX_WEIGHT);
+        const newW = Math.min(row.weight + cfg.learn_rate * 0.3, cfg.max_weight);
         await db.prepare("UPDATE brain SET weight=? WHERE indicator=?").bind(+newW.toFixed(4), ind).run();
       }
     }
@@ -391,15 +431,16 @@ async function brainLearn(db, indicators, pnl, pnlPct) {
 // POSITION MANAGEMENT
 // ─────────────────────────────────────
 async function openPosition(db, ticker, name, price, atr, score, activeInd) {
+  const cfg = await getSettings(db);
   const positions = await getPositions(db);
-  if (positions.length >= MAX_POSITIONS) return null;
+  if (positions.length >= cfg.max_positions) return null;
   if (positions.find((p) => p.ticker === ticker)) return null;
 
   const capital = await getCapital(db);
-  const slDist = Math.max(atr * 1.5, price * STOP_LOSS_PCT);
+  const slDist = Math.max(atr * 1.5, price * cfg.stop_loss_pct);
   if (slDist <= 0 || price <= 0) return null;
 
-  let shares = Math.max(1, Math.floor((capital * RISK_PER_TRADE) / slDist));
+  let shares = Math.max(1, Math.floor((capital * cfg.risk_per_trade) / slDist));
   const maxShares = Math.floor((capital * 0.35) / price);
   shares = Math.min(shares, maxShares);
   if (shares < 1) return null;
@@ -452,6 +493,7 @@ async function closePosition(db, ticker, price, reason) {
 // MAIN SCAN
 // ─────────────────────────────────────
 async function scan(db, env) {
+  const cfg = await getSettings(db);
   const weights = await getWeights(db);
   const capital = await getCapital(db);
   const positions = await getPositions(db);
@@ -492,9 +534,9 @@ async function scan(db, env) {
       let sl = pos.stop_loss;
       let trailingActive = pos.trailing_active;
       const gainPct = (highest - pos.entry_price) / pos.entry_price;
-      if (gainPct >= TRAILING_ACTIVATION) {
+      if (gainPct >= cfg.trailing_activation) {
         trailingActive = 1;
-        const newSl = +(highest * (1 - TRAILING_DISTANCE)).toFixed(2);
+        const newSl = +(highest * (1 - cfg.trailing_distance)).toFixed(2);
         if (newSl > sl) sl = newSl;
       }
       await db.prepare("UPDATE positions SET highest=?, stop_loss=?, trailing_active=? WHERE ticker=?")
@@ -599,6 +641,21 @@ async function handleAPI(request, env) {
     const closedTrades = (await db.prepare("SELECT * FROM closed_trades ORDER BY id DESC LIMIT 20").all()).results || [];
     const recentLogs = (await db.prepare("SELECT * FROM scan_log ORDER BY id DESC LIMIT 50").all()).results || [];
 
+    // Fetch live prices for open positions
+    for (const pos of positions) {
+      try {
+        const bars = await fetchBars(pos.ticker, env, "5d", "1d");
+        if (bars.length > 0) {
+          const lastPrice = bars[bars.length - 1].close;
+          pos.current_price = lastPrice;
+          pos.unrealized_pnl = +((lastPrice - pos.entry_price) * pos.shares).toFixed(2);
+          pos.unrealized_pct = +((lastPrice - pos.entry_price) / pos.entry_price * 100).toFixed(2);
+          await db.prepare("UPDATE positions SET current_price=?, unrealized_pnl=?, unrealized_pct=? WHERE ticker=?")
+            .bind(lastPrice, pos.unrealized_pnl, pos.unrealized_pct, pos.ticker).run();
+        }
+      } catch (e) {}
+    }
+
     let equity = capital;
     positions.forEach((p) => { equity += (p.current_price || p.entry_price) * p.shares; });
 
@@ -608,7 +665,7 @@ async function handleAPI(request, env) {
     return json({
       capital: +capital.toFixed(2),
       equity: +equity.toFixed(2),
-      pnl: +(equity - INITIAL_CAPITAL).toFixed(2),
+      pnl: +(equity - (await getSettings(db)).initial_capital).toFixed(2),
       dataSource: env.ALPACA_KEY ? "ALPACA + Yahoo" : "Yahoo Finance",
       positions: positions.map((p) => ({
         ...p,
@@ -652,14 +709,32 @@ async function handleAPI(request, env) {
 
   // POST /api/reset
   if (path === "/api/reset" && request.method === "POST") {
+    const cfg = await getSettings(db);
     await db.prepare("DELETE FROM positions").run();
     await db.prepare("DELETE FROM closed_trades").run();
     await db.prepare("DELETE FROM scan_log").run();
     await db.prepare("DELETE FROM brain_history").run();
     await db.prepare("UPDATE brain SET weight = default_weight").run();
-    await setCapital(db, INITIAL_CAPITAL);
+    await setCapital(db, cfg.initial_capital);
     await db.prepare("INSERT OR REPLACE INTO config VALUES ('total_trades', '0')").run();
-    return json({ success: true, capital: INITIAL_CAPITAL });
+    return json({ success: true, capital: cfg.initial_capital });
+  }
+
+  // GET /api/settings
+  if (path === "/api/settings" && request.method === "GET") {
+    const settings = await getSettings(db);
+    return json({ settings, meta: CONFIG_META });
+  }
+
+  // POST /api/settings
+  if (path === "/api/settings" && request.method === "POST") {
+    const body = await request.json();
+    const updated = [];
+    for (const [key, value] of Object.entries(body)) {
+      if (await saveSetting(db, key, value)) updated.push(key);
+    }
+    const settings = await getSettings(db);
+    return json({ success: true, updated, settings });
   }
 
   // GET / — dashboard HTML
@@ -756,6 +831,7 @@ tr:hover td{background:#222d42}
 .btn-action{background:var(--card);color:var(--text)}
 .btn-danger{background:var(--card);color:var(--red)}
 .btn-calc{background:var(--card);color:var(--cyan)}
+.btn-settings{background:var(--card);color:var(--accent)}
 .sep{border:none;border-top:1px solid var(--border);margin:10px 0}
 .side-label{font-size:.7rem;color:var(--text3);text-transform:uppercase;margin-bottom:4px}
 .side-stat{font-size:.85rem;color:var(--text2);margin-bottom:2px}
@@ -856,6 +932,8 @@ tr:hover td{background:#222d42}
   <hr class="sep">
   <button class="side-btn btn-calc" onclick="showCalc()">💰 Profitto netto</button>
   <hr class="sep">
+  <button class="side-btn btn-settings" onclick="showSettings()">⚙️ Impostazioni</button>
+  <hr class="sep">
   <button class="side-btn btn-danger" onclick="resetAll()">🗑 Reset</button>
   <hr class="sep">
 
@@ -900,6 +978,23 @@ tr:hover td{background:#222d42}
     <button class="side-btn btn-action" style="flex:1" onclick="hideCalc()">Chiudi</button>
   </div>
   <p style="font-size:.7rem;color:var(--text3);margin-top:8px;text-align:center">⚠ Stime indicative — consulta un commercialista</p>
+</div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div class="modal-bg" id="settingsModal">
+<div class="modal">
+  <h2>⚙️ Impostazioni</h2>
+  <p style="font-size:.8rem;color:var(--text3);margin-bottom:12px">Modifica i parametri del bot. Le modifiche si applicano dal prossimo scan.</p>
+  <div id="settingsFields"></div>
+  <div style="margin-top:6px;padding:10px;background:var(--card2);border-radius:6px;display:none" id="settingsSaved">
+    <span class="g">✓ Impostazioni salvate</span>
+  </div>
+  <div style="display:flex;gap:8px;margin-top:14px">
+    <button class="side-btn btn-start" style="flex:1" onclick="saveSettings()">💾 Salva</button>
+    <button class="side-btn btn-action" style="flex:1" onclick="resetSettings()">↩ Reset default</button>
+    <button class="side-btn btn-action" style="flex:1" onclick="hideSettings()">Chiudi</button>
+  </div>
 </div>
 </div>
 
@@ -1085,6 +1180,57 @@ function doCalc(){
 
 // Close modal on bg click
 document.getElementById("calcModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideCalc();});
+document.getElementById("settingsModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideSettings();});
+
+// Settings
+let settingsMeta={};
+async function showSettings(){
+  document.getElementById("settingsModal").style.display="flex";
+  document.getElementById("settingsSaved").style.display="none";
+  try{
+    const r=await fetch(API+"/settings");const d=await r.json();
+    settingsMeta=d.meta||{};
+    const container=document.getElementById("settingsFields");
+    container.innerHTML=Object.entries(d.settings).map(([k,v])=>{
+      const m=d.meta[k]||{};
+      const label=m.label||k;
+      const step=m.step||1;
+      const displayVal=m.pct?(v*100).toFixed(1):v;
+      return '<label>'+label+'</label><input type="number" step="'+step+'" id="cfg_'+k+'" value="'+displayVal+'" data-key="'+k+'" data-pct="'+(m.pct?"1":"0")+'">';
+    }).join("");
+  }catch(e){addLog("❌ Errore settings: "+e.message,"sell");}
+}
+function hideSettings(){document.getElementById("settingsModal").style.display="none";}
+
+async function saveSettings(){
+  const inputs=document.querySelectorAll("#settingsFields input");
+  const body={};
+  inputs.forEach(inp=>{
+    const k=inp.dataset.key;
+    let v=parseFloat(inp.value);
+    if(inp.dataset.pct==="1") v=v/100;
+    body[k]=v;
+  });
+  try{
+    const r=await fetch(API+"/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(d.success){
+      document.getElementById("settingsSaved").style.display="block";
+      addLog("⚙️ Settings salvati: "+d.updated.join(", "),"buy");
+      setTimeout(()=>{document.getElementById("settingsSaved").style.display="none";},3000);
+    }
+  }catch(e){addLog("❌ Errore salvataggio: "+e.message,"sell");}
+}
+
+async function resetSettings(){
+  if(!confirm("Ripristinare tutte le impostazioni ai valori default?"))return;
+  try{
+    const defaults={initial_capital:5000,max_positions:3,risk_per_trade:0.02,stop_loss_pct:0.025,trailing_activation:0.015,trailing_distance:0.012,cooldown_minutes:30,learn_rate:0.05,min_weight:0.05,max_weight:2.0,min_trades_to_learn:5};
+    const r=await fetch(API+"/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(defaults)});
+    const d=await r.json();
+    if(d.success){addLog("⚙️ Settings ripristinati ai default","buy");showSettings();}
+  }catch(e){addLog("❌ Errore reset: "+e.message,"sell");}
+}
 
 // Init
 load();
