@@ -634,6 +634,7 @@ async function handleAPI(request, env) {
 
   // GET /api/status — full status
   if (path === "/api/status") {
+    try {
     const capital = await getCapital(db);
     const positions = await getPositions(db);
     const weights = await getWeights(db);
@@ -678,12 +679,19 @@ async function handleAPI(request, env) {
       stats: { total: totalClosed, wins, wr: totalClosed > 0 ? +(wins / totalClosed * 100).toFixed(1) : 0 },
       recentScores: recentLogs,
     });
+    } catch (e) {
+      return json({ error: e.message, stack: e.stack }, 500);
+    }
   }
 
   // GET /api/scan — trigger scan
   if (path === "/api/scan") {
-    const result = await scan(db, env);
-    return json(result);
+    try {
+      const result = await scan(db, env);
+      return json(result);
+    } catch (e) {
+      return json({ error: e.message, stack: e.stack }, 500);
+    }
   }
 
   // POST /api/close — close position
@@ -1038,7 +1046,7 @@ async function load(){
           +'<div class="pos-detail mono">'+p.shares+'sh &middot; $'+p.entry_price.toFixed(2)+' → $'+cur.toFixed(2)+'</div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
           +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
-          +'<button class="pos-close" onclick="closeTicker(\''+p.ticker+'\')">Chiudi</button></div>';
+          +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')">Chiudi</button></div>';
       }).join("");
     }
 
@@ -1107,7 +1115,10 @@ async function doScan(){
   btn.textContent="⏳ Scansione...";btn.disabled=true;
   addLog("🔍 Scan avviato...","");
   try{
-    const r=await fetch(API+"/scan");const d=await r.json();
+    const r=await fetch(API+"/scan");
+    if(!r.ok){const err=await r.text();addLog("❌ Scan errore "+r.status+": "+err,"sell");btn.textContent="🔍 SCAN NOW";btn.disabled=false;return;}
+    const d=await r.json();
+    if(d.error){addLog("❌ "+d.error,"sell");btn.textContent="🔍 SCAN NOW";btn.disabled=false;return;}
     scanCount++;
     document.getElementById("cycleLabel").textContent="Ciclo "+scanCount;
     if(d.buys?.length) d.buys.forEach(b=>addLog("📝 BUY "+b.name+": "+b.shares+"sh @ $"+b.entry_price.toFixed(2),"buy"));
