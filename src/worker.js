@@ -11,7 +11,7 @@
 // ─────────────────────────────────────
 const CONFIG_DEFAULTS = {
   initial_capital: 5000,
-  max_positions: 3,
+  max_positions: 10,
   risk_per_trade: 0.02,
   stop_loss_pct: 0.025,
   trailing_activation: 0.015,
@@ -454,10 +454,19 @@ async function openPosition(db, ticker, name, price, atr, score, activeInd) {
   const slDist = Math.max(atr * 1.5, price * cfg.stop_loss_pct);
   if (slDist <= 0 || price <= 0) return null;
 
-  let shares = Math.max(1, Math.floor((capital * cfg.risk_per_trade) / slDist));
-  const maxShares = Math.floor((capital * 0.35) / price);
-  shares = Math.min(shares, maxShares);
-  if (shares < 1) return null;
+  const isCrypto = ticker.includes("-USD");
+  let shares;
+  if (isCrypto) {
+    shares = +((capital * cfg.risk_per_trade) / slDist).toFixed(6);
+    const maxShares = +((capital * 0.35) / price).toFixed(6);
+    shares = Math.min(shares, maxShares);
+    if (shares * price < 1) return null;
+  } else {
+    shares = Math.max(1, Math.floor((capital * cfg.risk_per_trade) / slDist));
+    const maxShares = Math.floor((capital * 0.35) / price);
+    shares = Math.min(shares, maxShares);
+    if (shares < 1) return null;
+  }
 
   const cost = shares * price;
   const sl = +(price - slDist).toFixed(2);
@@ -656,7 +665,7 @@ async function handleAPI(request, env) {
     const positions = await getPositions(db);
     const weights = await getWeights(db);
     const totalTrained = await getTotalTrained(db);
-    const closedTrades = (await db.prepare("SELECT * FROM closed_trades ORDER BY id DESC LIMIT 20").all()).results || [];
+    const closedTrades = (await db.prepare("SELECT * FROM closed_trades ORDER BY id DESC").all()).results || [];
     const recentLogs = (await db.prepare("SELECT * FROM scan_log ORDER BY id DESC LIMIT 50").all()).results || [];
 
     // Fetch live prices for open positions
@@ -694,6 +703,7 @@ async function handleAPI(request, env) {
       brain: { weights, totalTrained, confidence: Math.min(totalTrained / 100 * 100, 100) },
       stats: { total: totalClosed, wins, wr: totalClosed > 0 ? +(wins / totalClosed * 100).toFixed(1) : 0 },
       recentScores: recentLogs,
+      maxPositions: (await getSettings(db)).max_positions,
     });
     } catch (e) {
       return json({ error: e.message, stack: e.stack }, 500);
@@ -918,8 +928,8 @@ tr:hover td{background:#222d42}
       <div class="stat-sub" id="vSpyStatus"></div>
     </div>
     <div class="stat stat-pos">
-      <div class="stat-label">Posizioni <span class="info-i" data-tip="Max 3 posizioni aperte\\nper limitare il rischio">ⓘ</span></div>
-      <div class="stat-value" id="vPos">0/3</div>
+      <div class="stat-label">Posizioni <span class="info-i" data-tip="Posizioni aperte / massimo configurato">ⓘ</span></div>
+      <div class="stat-value" id="vPos">0/10</div>
     </div>
   </div>
 
@@ -940,6 +950,22 @@ tr:hover td{background:#222d42}
       <th style="text-align:center">Segnale <span class="info-i" data-tip="▲ BUY = compra\\n⏳ ATTESA = filtrato\\n— HOLD = aspetta\\n▼ SELL = vendi">ⓘ</span></th>
     </tr></thead>
     <tbody id="wlBody"><tr><td colspan="5" style="color:var(--text3);text-align:center">Premi Scan per analizzare</td></tr></tbody>
+  </table>
+
+  <!-- STORICO OPERAZIONI -->
+  <div class="section-hdr">Storico Operazioni <span class="info-i" data-tip="Tutte le operazioni di apertura e chiusura">ⓘ</span></div>
+  <table id="tradesTable">
+    <thead><tr>
+      <th>Data</th>
+      <th>Asset</th>
+      <th style="text-align:right">Entry</th>
+      <th style="text-align:right">Exit</th>
+      <th style="text-align:right">Shares</th>
+      <th style="text-align:right">P&L</th>
+      <th style="text-align:right">%</th>
+      <th>Motivo</th>
+    </tr></thead>
+    <tbody id="tradesBody"><tr><td colspan="8" style="color:var(--text3);text-align:center">Nessuna operazione</td></tr></tbody>
   </table>
 
   <!-- LOG -->
@@ -1041,7 +1067,7 @@ async function load(){
     document.getElementById("vCash").textContent="Cash: €"+d.capital.toFixed(2);
     document.getElementById("vPnl").textContent=(pnl>=0?"+":"")+"€"+pnl.toFixed(2);
     document.getElementById("vPnl").className="stat-value "+(pnl>=0?"g":"r");
-    document.getElementById("vPos").textContent=d.positions.length+"/3";
+    document.getElementById("vPos").textContent=d.positions.length+"/"+(d.maxPositions||10);
 
     // Profit calculator default
     document.getElementById("cGross").value=pnl.toFixed(2);
@@ -1059,7 +1085,7 @@ async function load(){
         const trail=p.trailing_active?" ⬆":"";
         return '<div class="pos-card '+(up?"pos-up":"pos-down")+'">'
           +'<div class="pos-name">'+p.name+trail+'</div>'
-          +'<div class="pos-detail mono">'+p.shares+'sh &middot; $'+p.entry_price.toFixed(2)+' → $'+cur.toFixed(2)+'</div>'
+          +'<div class="pos-detail mono">'+(p.shares%1===0?p.shares:p.shares.toFixed(4))+'sh &middot; $'+p.entry_price.toFixed(2)+' &rarr; $'+cur.toFixed(2)+'</div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
           +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
           +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')">Chiudi</button></div>';
@@ -1104,6 +1130,26 @@ async function load(){
     document.getElementById("sWr").style.color=st.wr>=50?"var(--green)":(st.total?"var(--red)":"var(--text2)");
     document.getElementById("sPnl").textContent="P&L: "+(closedPnl>=0?"+":"")+"€"+closedPnl.toFixed(2);
     document.getElementById("sPnl").style.color=closedPnl>=0?"var(--green)":"var(--red)";
+
+    // Trades history
+    const tb=document.getElementById("tradesBody");
+    if(d.closedTrades&&d.closedTrades.length){
+      tb.innerHTML=d.closedTrades.map(t=>{
+        const w=t.pnl>=0;
+        const dt=t.closed_at?new Date(t.closed_at).toLocaleString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
+        const reason=t.reason==="stop_loss"?"SL":(t.reason==="take_profit"?"TP":(t.reason==="manual_close"?"Manuale":t.reason));
+        return '<tr><td class="mono" style="font-size:.8rem">'+dt+'</td>'
+          +'<td>'+t.name+'</td>'
+          +'<td style="text-align:right" class="mono">$'+(t.entry_price||0).toFixed(2)+'</td>'
+          +'<td style="text-align:right" class="mono">$'+(t.exit_price||0).toFixed(2)+'</td>'
+          +'<td style="text-align:right">'+t.shares+'</td>'
+          +'<td style="text-align:right;font-weight:700" class="'+(w?"g":"r")+'">'+(w?"+":"")+"€"+t.pnl.toFixed(2)+'</td>'
+          +'<td style="text-align:right" class="'+(w?"g":"r")+'">'+(t.pnl_pct>=0?"+":"")+t.pnl_pct.toFixed(1)+'%</td>'
+          +'<td><span class="badge '+(t.reason==="take_profit"?"b-buy":(t.reason==="stop_loss"?"b-sell":"b-hold"))+'">'+reason+'</span></td></tr>';
+      }).join("");
+    } else {
+      tb.innerHTML='<tr><td colspan="8" style="color:var(--text3);text-align:center">Nessuna operazione</td></tr>';
+    }
 
     // Brain
     const br=d.brain||{};
