@@ -1351,7 +1351,7 @@ tr:hover td{background:var(--card2)}
 
 <script>
 const API=window.location.origin+"/api";
-let logs=[];let scanCount=0;
+let logs=[];let scanCount=0;let lastSeenScan=0;
 
 async function load(){
   const bar=document.getElementById("refreshBar");bar.style.width="30%";
@@ -1492,16 +1492,29 @@ async function load(){
       document.getElementById("scanTime").textContent="Ultima scan: "+scanDate.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
     }
 
-    // Show scan activity in logs (only on first load or if new entries)
-    if(d.scanActivity&&d.scanActivity.length&&!window._activityLoaded){
-      window._activityLoaded=true;
-      d.scanActivity.slice(-10).forEach(a=>{
-        const dt=new Date(a.t).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
-        let msg="🤖 Auto #"+a.n+" — "+a.scored+" asset, "+a.pos+" pos, SPY: "+a.spy;
-        if(a.buys.length) msg+=" | 📝 BUY: "+a.buys.join(", ");
-        if(a.closes.length) a.closes.forEach(c=>{ msg+=" | "+(c.pnl>=0?"🟢":"🔴")+" CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
-        addLog(msg,a.buys.length?"buy":(a.closes.length?"sell":""));
-      });
+    // Show scan activity in logs (new entries since last check)
+    if(d.scanActivity&&d.scanActivity.length){
+      const newEntries=d.scanActivity.filter(a=>a.n>lastSeenScan);
+      if(lastSeenScan===0){
+        // First load: show last 5 for context
+        d.scanActivity.slice(-5).forEach(a=>{
+          const dt=new Date(a.t).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+          let msg="🤖 Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" pos, SPY: "+a.spy;
+          if(a.buys.length) msg+=" | 📝 BUY: "+a.buys.join(", ");
+          if(a.closes.length) a.closes.forEach(c=>{ msg+=" | "+(c.pnl>=0?"🟢":"🔴")+" CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
+          addLog(msg,a.buys.length?"buy":(a.closes.length?"sell":""));
+        });
+      } else if(newEntries.length){
+        // Subsequent loads (every 30s): only new scans
+        newEntries.forEach(a=>{
+          const dt=new Date(a.t).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+          let msg="🤖 Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" pos, SPY: "+a.spy;
+          if(a.buys.length) msg+=" | 📝 BUY: "+a.buys.join(", ");
+          if(a.closes.length) a.closes.forEach(c=>{ msg+=" | "+(c.pnl>=0?"🟢":"🔴")+" CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
+          addLog(msg,a.buys.length?"buy":(a.closes.length?"sell":""));
+        });
+      }
+      lastSeenScan=d.scanActivity[d.scanActivity.length-1].n;
     }
 
     // SPY banner on load
