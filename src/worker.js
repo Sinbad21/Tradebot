@@ -691,6 +691,35 @@ async function scan(db, env) {
   results.capital = await getCapital(db);
   results.timestamp = now;
 
+  // Persist scan counter + activity log
+  try {
+    const prevCount = parseInt((await db.prepare("SELECT value FROM config WHERE key='scan_count'").first())?.value || "0");
+    const newCount = prevCount + 1;
+    await db.prepare("INSERT OR REPLACE INTO config VALUES ('scan_count', ?)").bind(newCount.toString()).run();
+    results.scanNumber = newCount;
+
+    // Build activity entry
+    const entry = {
+      n: newCount,
+      t: now,
+      scored: results.scores.length,
+      buys: results.buys.map(b => b.name),
+      closes: results.closes.map(c => ({ name: c.name, pnl: c.pnl, reason: c.reason })),
+      spy: results.spyStatus ? (results.spyStatus.bullish ? "BULL" : "BEAR") : "?",
+      pos: updatedPositions.length,
+    };
+
+    // Keep last 20 activity entries in config
+    let history = [];
+    try {
+      const raw = (await db.prepare("SELECT value FROM config WHERE key='scan_activity'").first())?.value;
+      if (raw) history = JSON.parse(raw);
+    } catch (e) {}
+    history.push(entry);
+    if (history.length > 20) history = history.slice(-20);
+    await db.prepare("INSERT OR REPLACE INTO config VALUES ('scan_activity', ?)").bind(JSON.stringify(history)).run();
+  } catch (e) {}
+
   return results;
 }
 
@@ -857,7 +886,8 @@ async function handleAPI(request, env) {
       recentScores: recentLogs,
       maxPositions: cfg.max_positions,
       lastScanAt: recentLogs.length ? recentLogs[0].created_at : null,
-      totalScans: (await db.prepare("SELECT COUNT(DISTINCT created_at) as c FROM scan_log").first())?.c || 0,
+      totalScans: parseInt((await db.prepare("SELECT value FROM config WHERE key='scan_count'").first())?.value || "0"),
+      scanActivity: JSON.parse((await db.prepare("SELECT value FROM config WHERE key='scan_activity'").first())?.value || "[]"),
     });
     } catch (e) {
       return json({ error: e.message, stack: e.stack }, 500);
@@ -1460,6 +1490,18 @@ async function load(){
       else if(ago<30){dot.className="scan-dot stale";lbl.textContent="Scan "+ago+" min fa";}
       else{dot.className="scan-dot offline";lbl.textContent="Nessuna scan da "+ago+" min";}
       document.getElementById("scanTime").textContent="Ultima scan: "+scanDate.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+    }
+
+    // Show scan activity in logs (only on first load or if new entries)
+    if(d.scanActivity&&d.scanActivity.length&&!window._activityLoaded){
+      window._activityLoaded=true;
+      d.scanActivity.slice(-10).forEach(a=>{
+        const dt=new Date(a.t).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+        let msg="🤖 Auto #"+a.n+" — "+a.scored+" asset, "+a.pos+" pos, SPY: "+a.spy;
+        if(a.buys.length) msg+=" | 📝 BUY: "+a.buys.join(", ");
+        if(a.closes.length) a.closes.forEach(c=>{ msg+=" | "+(c.pnl>=0?"🟢":"🔴")+" CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
+        addLog(msg,a.buys.length?"buy":(a.closes.length?"sell":""));
+      });
     }
 
     // SPY banner on load
