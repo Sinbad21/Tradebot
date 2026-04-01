@@ -71,15 +71,22 @@ const WATCHLIST = {
   AMZN: "Amazon", MSFT: "Microsoft", GOOGL: "Alphabet",
   JPM: "JPMorgan", XOM: "ExxonMobil",
   GLD: "Gold ETF", SPY: "S&P 500", QQQ: "Nasdaq 100",
-  // EU Stocks (Milano, Francoforte, Parigi, Amsterdam)
+  // EU Stocks
   "ENI.MI": "ENI", "ISP.MI": "Intesa Sanpaolo", "UCG.MI": "UniCredit",
   "ENEL.MI": "Enel", "STLAM.MI": "Stellantis",
   "SAP.DE": "SAP", "SIE.DE": "Siemens", "BAS.DE": "BASF",
   "MC.PA": "LVMH", "OR.PA": "L'Or\u00e9al", "TTE.PA": "TotalEnergies",
   "ASML.AS": "ASML",
-  // Crypto
+  // Crypto — 27 coins
   "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana",
   "XRP-USD": "XRP", "DOGE-USD": "Dogecoin", "ADA-USD": "Cardano",
+  "BNB-USD": "BNB", "AVAX-USD": "Avalanche", "DOT-USD": "Polkadot",
+  "LINK-USD": "Chainlink", "MATIC-USD": "Polygon", "UNI-USD": "Uniswap",
+  "ATOM-USD": "Cosmos", "LTC-USD": "Litecoin", "NEAR-USD": "NEAR",
+  "ARB-USD": "Arbitrum", "OP-USD": "Optimism", "APT-USD": "Aptos",
+  "SUI-USD": "SUI", "INJ-USD": "Injective", "RENDER-USD": "Render",
+  "FET-USD": "Fetch.ai", "PEPE-USD": "Pepe", "SHIB-USD": "Shiba Inu",
+  "TON-USD": "Toncoin", "TRX-USD": "Tron", "FIL-USD": "Filecoin",
 };
 
 // ─────────────────────────────────────
@@ -1101,6 +1108,16 @@ tr:hover td{background:var(--card2)}
   .stats{grid-template-columns:1fr 1fr}.stat-equity .stat-value{font-size:1.4rem}
   .content{padding:12px 14px}
 }
+/* BEARISH BANNER */
+.bear-banner{display:none;align-items:center;gap:10px;padding:12px 20px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:10px;margin-bottom:14px;animation:bannerPulse 3s infinite}
+.bear-banner.show{display:flex}
+.bear-icon{font-size:1.4rem}
+.bear-text{flex:1}
+.bear-title{font-weight:700;font-size:.88rem;color:var(--red)}
+.bear-sub{font-size:.75rem;color:var(--text3);margin-top:2px}
+.bear-dismiss{background:none;border:1px solid rgba(239,68,68,.3);color:var(--text3);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:.7rem}
+.bear-dismiss:hover{background:rgba(239,68,68,.15);color:var(--text)}
+@keyframes bannerPulse{0%,100%{border-color:rgba(239,68,68,.2)}50%{border-color:rgba(239,68,68,.4)}}
 </style></head><body>
 <div class="refresh-bar" id="refreshBar" style="width:0"></div>
 
@@ -1121,6 +1138,14 @@ tr:hover td{background:var(--card2)}
 <div class="content">
 
   <!-- STAT CARDS -->
+  <div class="bear-banner" id="bearBanner">
+    <span class="bear-icon">⛔</span>
+    <div class="bear-text">
+      <div class="bear-title">Mercato sfavorevole — Bot in osservazione</div>
+      <div class="bear-sub">SPY sotto EMA50: il mercato è ribassista. Il bot monitora ma non apre nuove posizioni (solo gestione trailing stop su posizioni aperte).</div>
+    </div>
+    <button class="bear-dismiss" onclick="this.parentElement.classList.remove('show')">Nascondi</button>
+  </div>
   <div class="stats">
     <div class="stat stat-equity">
       <div class="stat-label">Equity <span class="info-i" data-tip="Valore totale: cash + posizioni aperte">ⓘ</span></div>
@@ -1439,6 +1464,9 @@ async function doScan(){
       document.getElementById("vSpy").className="stat-value "+(d.spyStatus.bullish?"g":"r");
       document.getElementById("vSpyStatus").textContent=d.spyStatus.bullish?"BULL ▲":"BEAR ▼";
       document.getElementById("vSpyStatus").className="stat-sub "+(d.spyStatus.bullish?"g":"r");
+      // Show/hide bearish banner
+      const bb=document.getElementById("bearBanner");
+      if(!d.spyStatus.bullish){bb.classList.add("show");}else{bb.classList.remove("show");}
       const pill=document.getElementById("mktPill");
       // Rough market hours check (14:30-21:00 CET)
       const h=new Date().getUTCHours();const isOpen=h>=13&&h<21;
