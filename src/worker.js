@@ -818,6 +818,16 @@ async function handleAPI(request, env) {
     let equity = capital;
     positions.forEach((p) => { equity += (p.current_price || p.entry_price) * (p.shares || 0); });
 
+    // SPY status for bearish banner
+    let spyStatus = null;
+    try {
+      const spyLog = await db.prepare("SELECT * FROM scan_log WHERE ticker='SPY' ORDER BY id DESC LIMIT 1").first();
+      if (spyLog) {
+        const spyPrice = await fetchLatestPrice("SPY", env) || spyLog.price;
+        spyStatus = { price: +(spyPrice).toFixed(2), bullish: spyLog.score >= 0 };
+      }
+    } catch (e) {}
+
     const wins = closedTrades.filter((t) => t.pnl > 0).length;
     const totalClosed = closedTrades.length;
     const cfg = await getSettings(db);
@@ -827,6 +837,7 @@ async function handleAPI(request, env) {
       equity: +(equity || 0).toFixed(2),
       pnl: +((equity || 0) - cfg.initial_capital).toFixed(2),
       dataSource: env.ALPACA_KEY ? "ALPACA + Yahoo" : "Yahoo Finance",
+      spyStatus,
       positions: positions.map((p) => ({
         ...p,
         trailing_active: !!p.trailing_active,
@@ -838,6 +849,7 @@ async function handleAPI(request, env) {
       stats: { total: totalClosed, wins, wr: totalClosed > 0 ? +(wins / totalClosed * 100).toFixed(1) : 0 },
       recentScores: recentLogs,
       maxPositions: cfg.max_positions,
+      lastScanAt: recentLogs.length ? recentLogs[0].created_at : null,
     });
     } catch (e) {
       return json({ error: e.message, stack: e.stack }, 500);
@@ -994,6 +1006,11 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple
 .pill{font-size:.65rem;padding:4px 12px;border-radius:20px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
 .pill-open{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
 .pill-closed{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2)}
+.scan-status{display:flex;align-items:center;gap:6px;font-size:.72rem;color:var(--text3);background:var(--card);padding:4px 12px;border-radius:6px}
+.scan-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:scanPulse 2s ease-in-out infinite}
+.scan-dot.stale{background:var(--yellow);animation:none}
+.scan-dot.offline{background:var(--red);animation:none}
+@keyframes scanPulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(16,185,129,.4)}50%{opacity:.6;box-shadow:0 0 0 4px rgba(16,185,129,0)}}
 
 /* LAYOUT */
 .main{display:flex;gap:0;min-height:calc(100vh - 49px)}
@@ -1130,6 +1147,7 @@ tr:hover td{background:var(--card2)}
   <div class="top-right">
     <span class="source"><span class="dot" id="srcDot">●</span> <span id="srcName">...</span></span>
     <span class="pill pill-closed" id="mktPill">CHIUSO</span>
+    <span class="scan-status"><span class="scan-dot" id="scanDot"></span><span id="scanLabel">Auto scan ogni 5 min</span></span>
     <span style="font-size:.75rem;color:var(--text3)" id="cycleLabel"></span>
   </div>
 </div>
@@ -1420,6 +1438,32 @@ async function load(){
     document.getElementById("bConf").textContent="Confidenza: "+(br.confidence||0).toFixed(0)+"%";
     document.getElementById("bConf").style.color=br.confidence>=50?"var(--green)":(br.confidence>=20?"var(--yellow)":"var(--text3)");
     document.getElementById("bTrained").textContent="Addestrato: "+(br.totalTrained||0)+" trade";
+
+    // Scan status
+    if(d.lastScanAt){
+      const scanDate=new Date(d.lastScanAt);
+      const ago=Math.floor((Date.now()-scanDate.getTime())/60000);
+      const dot=document.getElementById("scanDot");
+      const lbl=document.getElementById("scanLabel");
+      if(ago<10){dot.className="scan-dot";lbl.textContent="Auto ✓ Ultima: "+scanDate.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});}
+      else if(ago<30){dot.className="scan-dot stale";lbl.textContent="Scan "+ago+" min fa";}
+      else{dot.className="scan-dot offline";lbl.textContent="Nessuna scan da "+ago+" min";}
+      document.getElementById("scanTime").textContent="Ultima scan: "+scanDate.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+    }
+
+    // SPY banner on load
+    if(d.spyStatus){
+      document.getElementById("vSpy").textContent="$"+d.spyStatus.price.toFixed(2);
+      document.getElementById("vSpy").className="stat-value "+(d.spyStatus.bullish?"g":"r");
+      document.getElementById("vSpyStatus").textContent=d.spyStatus.bullish?"BULL ▲":"BEAR ▼";
+      document.getElementById("vSpyStatus").className="stat-sub "+(d.spyStatus.bullish?"g":"r");
+      const bb=document.getElementById("bearBanner");
+      if(!d.spyStatus.bullish){bb.classList.add("show");}else{bb.classList.remove("show");}
+      const pill=document.getElementById("mktPill");
+      const h=new Date().getUTCHours();const isOpen=h>=13&&h<21;
+      pill.textContent=isOpen?" APERTO ":" CHIUSO ";
+      pill.className="pill "+(isOpen?"pill-open":"pill-closed");
+    }
 
     bar.style.width="100%";setTimeout(()=>{bar.style.width="0"},400);
   }catch(e){
