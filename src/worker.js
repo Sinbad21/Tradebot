@@ -580,6 +580,10 @@ async function scan(db, env) {
       ema50: +spyRow.ema50.toFixed(2),
       bullish: spyRow.close > spyRow.ema50,
     };
+    // Save SPY to scan_log so /api/status can retrieve it
+    const spyScore = spyRow.close > spyRow.ema50 ? 1 : -1;
+    await db.prepare("INSERT INTO scan_log (created_at,ticker,price,score,rsi,signal,reasons) VALUES (?,?,?,?,?,?,?)")
+      .bind(now, "SPY", spyRow.close, spyScore, spyRow.rsi || 50, 0, spyRow.close > spyRow.ema50 ? "Above EMA50" : "Below EMA50").run();
   }
 
   // Update prices & check stops
@@ -853,6 +857,7 @@ async function handleAPI(request, env) {
       recentScores: recentLogs,
       maxPositions: cfg.max_positions,
       lastScanAt: recentLogs.length ? recentLogs[0].created_at : null,
+      totalScans: (await db.prepare("SELECT COUNT(DISTINCT created_at) as c FROM scan_log").first())?.c || 0,
     });
     } catch (e) {
       return json({ error: e.message, stack: e.stack }, 500);
@@ -1329,6 +1334,9 @@ async function load(){
     // Source
     document.getElementById("srcName").textContent=d.dataSource||"Yahoo";
     document.getElementById("srcDot").style.color=d.dataSource?.includes("ALPACA")?"var(--green)":"var(--yellow)";
+
+    // Ciclo from DB
+    if(d.totalScans) document.getElementById("cycleLabel").textContent="Ciclo "+d.totalScans;
 
     // Stats
     const pnl=d.pnl||0;
