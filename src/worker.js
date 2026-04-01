@@ -423,41 +423,44 @@ async function brainLearn(db, indicators, pnl, pnlPct) {
 
   const totalTrained = await getTotalTrained(db) + 1;
   await db.prepare("INSERT OR REPLACE INTO config VALUES ('total_trades', ?)").bind(totalTrained.toString()).run();
-
-  // Save to history
   await db.prepare("INSERT INTO brain_history (indicators, pnl, pnl_pct, created_at) VALUES (?,?,?,?)")
     .bind(JSON.stringify(indicators), pnl, pnlPct, new Date().toISOString()).run();
 
   const cfg = await getSettings(db);
-  if (totalTrained < cfg.min_trades_to_learn) return `Trade ${totalTrained}/${cfg.min_trades_to_learn} — raccolta dati`;
+  if (totalTrained < cfg.min_trades_to_learn) 
+    return `Trade ${totalTrained}/${cfg.min_trades_to_learn} — raccolta dati`;
 
   const isWin = pnl > 0;
   const magnitude = Math.min(Math.abs(pnlPct) / 5, 1.0);
-  const delta = cfg.learn_rate * magnitude;
+  const decayFactor = Math.max(0.3, 1.0 - (totalTrained / 500));
+  const delta = cfg.learn_rate * magnitude * decayFactor;
   const adjustments = [];
+  const DECAY_TO_DEFAULT = 0.02;
 
   for (const ind of indicators) {
-    const row = await db.prepare("SELECT weight FROM brain WHERE indicator=?").bind(ind).first();
+    const row = await db.prepare("SELECT weight, default_weight FROM brain WHERE indicator=?").bind(ind).first();
     if (!row) continue;
     let newW = isWin ? Math.min(row.weight + delta, cfg.max_weight) : Math.max(row.weight - delta, cfg.min_weight);
+    newW = newW + (row.default_weight - newW) * DECAY_TO_DEFAULT;
     await db.prepare("UPDATE brain SET weight=? WHERE indicator=?").bind(+newW.toFixed(4), ind).run();
     adjustments.push(`${ind}${isWin ? "+" : "-"}${delta.toFixed(3)}`);
   }
 
-  // Bonus for inactive indicators on loss
-  if (!isWin) {
+  if (!isWin && indicators.length <= 2) {
     const allInd = ["macd_cross", "macd_hist", "rsi", "ema_trend", "bollinger", "mean_rev", "vol_growing"];
-    const inactive = allInd.filter((i) => !indicators.includes(i));
+    const inactive = allInd.filter(i => !indicators.includes(i));
+    const smallBonus = cfg.learn_rate * 0.08 * decayFactor;
     for (const ind of inactive) {
-      const row = await db.prepare("SELECT weight FROM brain WHERE indicator=?").bind(ind).first();
+      const row = await db.prepare("SELECT weight, default_weight FROM brain WHERE indicator=?").bind(ind).first();
       if (row) {
-        const newW = Math.min(row.weight + cfg.learn_rate * 0.3, cfg.max_weight);
+        let newW = Math.min(row.weight + smallBonus, cfg.max_weight);
+        newW = newW + (row.default_weight - newW) * DECAY_TO_DEFAULT;
         await db.prepare("UPDATE brain SET weight=? WHERE indicator=?").bind(+newW.toFixed(4), ind).run();
       }
     }
   }
 
-  return `${isWin ? "WIN" : "LOSS"} ${pnlPct > 0 ? "+" : ""}${pnlPct.toFixed(1)}% → ${adjustments.join(", ")}`;
+  return `${isWin ? "WIN" : "LOSS"} ${pnlPct > 0 ? "+" : ""}${pnlPct.toFixed(1)}% → ${adjustments.join(", ")} [lr×${decayFactor.toFixed(2)}]`;
 }
 
 // ─────────────────────────────────────
