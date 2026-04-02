@@ -310,7 +310,7 @@ function addIndicators(bars) {
 // ─────────────────────────────────────
 // SIGNAL GENERATION
 // ─────────────────────────────────────
-function generateSignal(row, prev, spyRow, weights) {
+function generateSignal(row, prev, spyRow, weights, ticker = "") {
   let score = 0;
   const reasons = [];
   const activeInd = [];
@@ -365,8 +365,12 @@ function generateSignal(row, prev, spyRow, weights) {
     // Weekly trend
     if (row.ema45 < row.ema105 && !meanRev) { buyOk = false; reject.push("weekly ↓"); }
 
-    // SPY regime
-    if (spyRow && spyRow.close < spyRow.ema50 && !meanRev) { buyOk = false; reject.push("SPY<EMA50"); }
+    // SPY regime — solo per azioni USA (EU e crypto hanno mercati indipendenti)
+    const isCryptoTicker = ticker.includes("-USD");
+    const isEUTicker = /\.(MI|DE|PA|AS|L|MC)$/.test(ticker);
+    if (spyRow && spyRow.close < spyRow.ema50 && !meanRev && !isCryptoTicker && !isEUTicker) {
+      buyOk = false; reject.push("SPY<EMA50");
+    }
 
     // EMA50 filter
     if (row.close < row.ema50 && !meanRev) { score -= 0.3; if (score < 0.8) { buyOk = false; reject.push("<EMA50"); } }
@@ -652,7 +656,7 @@ async function scan(db, env) {
 
       const row = enriched[enriched.length - 1];
       const prev = enriched[enriched.length - 2];
-      const { signal, score, rsi, atr, reasons, activeInd } = generateSignal(row, prev, spyRow, weights);
+      const { signal, score, rsi, atr, reasons, activeInd } = generateSignal(row, prev, spyRow, weights, ticker);
 
       results.scores.push({ ticker, name, price: +row.close.toFixed(2), score, rsi, signal, reasons });
 
