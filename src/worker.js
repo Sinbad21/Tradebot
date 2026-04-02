@@ -62,7 +62,6 @@ async function saveSetting(db, key, value) {
 // Backward compat — still used in getCapital default
 const INITIAL_CAPITAL = CONFIG_DEFAULTS.initial_capital;
 
-// ─────────────────────────────────────
 // WATCHLIST
 // ─────────────────────────────────────
 const WATCHLIST = {
@@ -987,8 +986,8 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-s
 .login-sub{color:var(--text3);font-size:.82rem;margin-bottom:24px}
 .login-input{width:100%;padding:14px 16px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:.95rem;margin-bottom:14px;outline:none;font-family:'Inter',sans-serif;transition:border-color .15s}
 .login-input:focus{border-color:var(--accent)}
-.login-btn{width:100%;padding:14px;background:linear-gradient(135deg,var(--accent),#7c3aed);color:#fff;border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;transition:all .15s;box-shadow:0 4px 16px rgba(139,92,246,.3)}
-.login-btn:hover{filter:brightness(1.1);transform:translateY(-1px);box-shadow:0 6px 24px rgba(139,92,246,.4)}
+.login-btn{width:100%;padding:14px;background:linear-gradient(135deg,var(--accent),#1d4ed8);color:#fff;border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;transition:all .15s;box-shadow:0 4px 16px rgba(37,99,235,.3)}
+.login-btn:hover{filter:brightness(1.1);transform:translateY(-1px);box-shadow:0 6px 24px rgba(37,99,235,.4)}
 .login-btn:disabled{opacity:.5;cursor:wait;transform:none}
 .login-err{color:var(--red);font-size:.82rem;margin-top:10px;display:none;font-weight:600}
 </style></head><body>
@@ -997,7 +996,7 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-s
   <p class="login-sub">Inserisci la password per accedere</p>
   <form onsubmit="doLogin(event)">
     <input type="password" class="login-input" id="loginPwd" placeholder="Password" autocomplete="current-password" autofocus>
-    <button type="submit" class="login-btn" id="loginBtn">🔐 Accedi</button>
+    <button type="submit" class="login-btn" id="loginBtn">Accedi</button>
   </form>
   <div class="login-err" id="loginErr"></div>
 </div>
@@ -1008,14 +1007,14 @@ async function doLogin(e){
   const err=document.getElementById("loginErr");
   const pwd=document.getElementById("loginPwd").value;
   if(!pwd){err.textContent="Inserisci la password";err.style.display="block";return;}
-  btn.disabled=true;btn.textContent="⏳...";
+  btn.disabled=true;btn.textContent="Accesso...";
   try{
     const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});
     const d=await r.json();
     if(d.success){window.location.href="/";}
     else{err.textContent=d.error||"Errore";err.style.display="block";}
   }catch(ex){err.textContent="Errore di connessione";err.style.display="block";}
-  btn.disabled=false;btn.textContent="🔐 Accedi";
+  btn.disabled=false;btn.textContent="Accedi";
 }
 <\/script></body></html>`;
 
@@ -1023,17 +1022,17 @@ async function doLogin(e){
 // MINI DASHBOARD HTML
 // ─────────────────────────────────────
 const DASHBOARD_HTML = `<!DOCTYPE html>
-<html lang="it"><head><meta charset="utf-8"><title>Trading Bot — Monitor</title>
+<html lang="it"><head><meta charset="utf-8"><title>Tradebot — Command Center</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
-:root{--bg:#0b0f19;--bg2:#111827;--card:#151c2c;--card2:#1a2236;--card3:#1e2740;--border:#252e42;--border2:#2d3a52;
+:root{--bg:#07111f;--bg2:#0d1726;--card:#111c2d;--card2:#162235;--card3:#1a2940;--border:#233247;--border2:#30445e;
 --text:#eef0f6;--text2:#94a3b8;--text3:#64748b;--text4:#475569;
 --green:#10b981;--green2:#059669;--red:#ef4444;--red2:#dc2626;--blue:#3b82f6;--yellow:#eab308;--orange:#f97316;
---accent:#8b5cf6;--accent2:#7c3aed;--cyan:#06b6d4;--pink:#ec4899;
---glow-green:0 0 20px rgba(16,185,129,.15);--glow-red:0 0 20px rgba(239,68,68,.15);--glow-accent:0 0 20px rgba(139,92,246,.15)}
+--accent:#2563eb;--accent2:#1d4ed8;--cyan:#0ea5e9;--pink:#14b8a6;
+--glow-green:0 0 20px rgba(16,185,129,.15);--glow-red:0 0 20px rgba(239,68,68,.15);--glow-accent:0 0 24px rgba(37,99,235,.16)}
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased}
+body{background:radial-gradient(circle at top left,rgba(37,99,235,.12),transparent 28%),radial-gradient(circle at top right,rgba(20,184,166,.08),transparent 24%),var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased}
 
 /* TOP BAR */
 .topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 24px;background:var(--bg2);border-bottom:1px solid var(--border);backdrop-filter:blur(12px);position:sticky;top:0;z-index:50}
@@ -1075,6 +1074,20 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple
 .stat-equity .stat-value{font-size:1.8rem}
 .stat-sub{font-size:.72rem;color:var(--text4);margin-top:4px;font-weight:500}
 
+/* OVERVIEW */
+.overview-grid{display:grid;grid-template-columns:1.65fr 1fr;gap:12px;margin-bottom:20px}
+.panel{background:linear-gradient(180deg,rgba(255,255,255,.015),transparent 40%),var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;min-height:100%;box-shadow:0 18px 40px rgba(0,0,0,.18)}
+.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.panel-kicker{font-size:.68rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700}
+.panel-head h3{font-size:1rem;font-weight:700;margin-top:4px}
+.panel-meta{font-size:.72rem;color:var(--text3);background:var(--card2);border:1px solid var(--border);padding:6px 10px;border-radius:999px;white-space:nowrap}
+.chart-shell{position:relative;height:260px}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.detail-card{background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;min-height:92px}
+.detail-card span{display:block;font-size:.68rem;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;font-weight:700}
+.detail-card strong{display:block;font-size:1rem;font-weight:800;margin-top:8px;font-family:'JetBrains Mono',monospace}
+.detail-card small{display:block;margin-top:6px;color:var(--text3);font-size:.75rem;line-height:1.45}
+
 /* SECTION HEADERS */
 .section-hdr{font-size:.7rem;color:var(--text3);text-transform:uppercase;letter-spacing:1.2px;font-weight:700;margin:24px 0 10px;display:flex;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--border)}
 .info-i{color:var(--text4);cursor:help;position:relative;font-size:.8rem;transition:color .15s}
@@ -1096,6 +1109,15 @@ tr:hover td{background:var(--card2)}
 .b-down{background:rgba(249,115,22,.1);color:var(--orange);border:1px solid rgba(249,115,22,.2)}
 .mono{font-family:'JetBrains Mono','Consolas',monospace}
 .g{color:var(--green)}.r{color:var(--red)}.y{color:var(--yellow)}.o{color:var(--orange)}.c{color:var(--cyan)}
+.asset-cell{display:flex;align-items:center;gap:10px}
+.asset-marker{width:10px;height:10px;border-radius:50%;background:var(--border2);flex-shrink:0}
+.asset-marker.us{background:var(--blue);box-shadow:0 0 0 4px rgba(59,130,246,.12)}
+.asset-marker.eu{background:var(--accent);box-shadow:0 0 0 4px rgba(37,99,235,.12)}
+.asset-marker.crypto{background:var(--orange);box-shadow:0 0 0 4px rgba(249,115,22,.12)}
+.asset-main{display:flex;flex-direction:column;gap:3px}
+.asset-ticker{font-weight:700;color:var(--text)}
+.asset-kind{font-size:.66rem;color:var(--text3);text-transform:uppercase;letter-spacing:.8px}
+.trail-pill{display:inline-flex;align-items:center;padding:2px 6px;border-radius:999px;background:rgba(16,185,129,.12);color:var(--green);font-size:.62rem;font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-left:8px}
 
 /* POSITIONS */
 .pos-wrap{margin-bottom:8px}
@@ -1124,6 +1146,9 @@ tr:hover td{background:var(--card2)}
 /* SIDEBAR */
 .side-btn{width:100%;padding:10px 14px;border:1px solid transparent;border-radius:8px;cursor:pointer;font-size:.85rem;font-weight:600;text-align:left;transition:all .15s;display:flex;align-items:center;gap:8px}
 .side-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.side-btn i{width:16px;height:16px;stroke-width:2;flex-shrink:0}
+.side-btn .btn-label{flex:1}
+.side-btn.is-busy{cursor:wait;opacity:.85}
 .btn-start{background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-size:.95rem;padding:12px 14px;text-align:center;justify-content:center;border-radius:10px;box-shadow:0 4px 16px rgba(16,185,129,.25)}
 .btn-start:hover{box-shadow:0 6px 24px rgba(16,185,129,.35)}
 .btn-action{background:var(--card);color:var(--text2);border-color:var(--border)}
@@ -1133,12 +1158,13 @@ tr:hover td{background:var(--card2)}
 .btn-calc{background:var(--card);color:var(--cyan);border-color:var(--border)}
 .btn-calc:hover{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3)}
 .btn-settings{background:var(--card);color:var(--accent);border-color:var(--border)}
-.btn-settings:hover{background:rgba(139,92,246,.08);border-color:rgba(139,92,246,.3)}
+.btn-settings:hover{background:rgba(37,99,235,.08);border-color:rgba(37,99,235,.3)}
 .sep{border:none;border-top:1px solid var(--border);margin:8px 0}
 .side-label{font-size:.65rem;color:var(--text4);text-transform:uppercase;letter-spacing:1px;font-weight:700;margin:4px 0}
 .side-stat{font-size:.82rem;color:var(--text2);margin-bottom:3px;font-weight:500}
 .brain-section{margin-top:4px;background:var(--card);border-radius:8px;padding:10px 12px;border:1px solid var(--border)}
 .brain-label{color:var(--accent);font-size:.65rem;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px}
+.brain-label i{width:14px;height:14px;vertical-align:-2px;margin-right:6px;stroke-width:2}
 
 /* LOG */
 .log-box{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-family:'JetBrains Mono',monospace;font-size:.75rem;max-height:200px;overflow-y:auto;color:var(--text2);line-height:1.6}
@@ -1150,6 +1176,8 @@ tr:hover td{background:var(--card2)}
 .modal{background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:28px;width:500px;max-width:92vw;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.5)}
 .modal::-webkit-scrollbar{width:4px}.modal::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
 .modal h2{font-size:1.15rem;margin-bottom:14px;font-weight:700}
+.modal-title{display:flex;align-items:center;gap:10px}
+.modal-title i{width:18px;height:18px;stroke-width:2}
 .modal label{display:block;font-size:.78rem;color:var(--text3);margin-top:12px;font-weight:600;letter-spacing:.3px}
 .modal input,.modal select{width:100%;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.85rem;margin-top:4px;transition:border-color .15s;outline:none}
 .modal input:focus,.modal select:focus{border-color:var(--accent)}
@@ -1165,26 +1193,32 @@ tr:hover td{background:var(--card2)}
 @media(max-width:768px){
   .main{flex-direction:column}.sidebar{width:100%;border-left:none;border-top:1px solid var(--border);flex-direction:row;flex-wrap:wrap;gap:4px}
   .stats{grid-template-columns:1fr 1fr}.stat-equity .stat-value{font-size:1.4rem}
+  .overview-grid{grid-template-columns:1fr}
+  .detail-grid{grid-template-columns:1fr}
   .content{padding:12px 14px}
 }
 /* BEARISH BANNER */
 .bear-banner{display:none;align-items:center;gap:10px;padding:12px 20px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:10px;margin-bottom:14px;animation:bannerPulse 3s infinite}
 .bear-banner.show{display:flex}
-.bear-icon{font-size:1.4rem}
+.bear-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:rgba(239,68,68,.12);color:var(--red)}
+.bear-icon i{width:18px;height:18px;stroke-width:2}
 .bear-text{flex:1}
 .bear-title{font-weight:700;font-size:.88rem;color:var(--red)}
 .bear-sub{font-size:.75rem;color:var(--text3);margin-top:2px}
 .bear-dismiss{background:none;border:1px solid rgba(239,68,68,.3);color:var(--text3);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:.7rem}
 .bear-dismiss:hover{background:rgba(239,68,68,.15);color:var(--text)}
 @keyframes bannerPulse{0%,100%{border-color:rgba(239,68,68,.2)}50%{border-color:rgba(239,68,68,.4)}}
-</style></head><body>
+</style>
+<script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+</head><body>
 <div class="refresh-bar" id="refreshBar" style="width:0"></div>
 
 <div class="topbar">
   <div class="logo">
     <span class="logo-dot"></span>
     <span class="logo-text">TRADEBOT</span>
-    <span class="logo-ver">v3.1</span>
+    <span class="logo-ver">v3.2</span>
   </div>
   <div class="top-right">
     <span class="source"><span class="dot" id="srcDot">●</span> <span id="srcName">...</span></span>
@@ -1199,7 +1233,7 @@ tr:hover td{background:var(--card2)}
 
   <!-- STAT CARDS -->
   <div class="bear-banner" id="bearBanner">
-    <span class="bear-icon">⛔</span>
+    <span class="bear-icon"><i data-lucide="shield-alert"></i></span>
     <div class="bear-text">
       <div class="bear-title">Mercato sfavorevole — Bot in osservazione</div>
       <div class="bear-sub">SPY sotto EMA50: il mercato è ribassista. Il bot monitora ma non apre nuove posizioni (solo gestione trailing stop su posizioni aperte).</div>
@@ -1227,8 +1261,38 @@ tr:hover td{background:var(--card2)}
     </div>
   </div>
 
+  <div class="overview-grid">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-kicker">Performance</div>
+          <h3>Andamento operativo</h3>
+        </div>
+        <div class="panel-meta" id="perfMeta">In attesa dati</div>
+      </div>
+      <div class="chart-shell"><canvas id="equityChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-kicker">System</div>
+          <h3>Stato del motore</h3>
+        </div>
+        <div class="panel-meta" id="overviewStatus">Monitoraggio attivo</div>
+      </div>
+      <div class="detail-grid">
+        <div class="detail-card"><span>Ultima scan</span><strong id="dLastScan">—</strong><small id="dScanAge">In attesa di attività</small></div>
+        <div class="detail-card"><span>Esposizione</span><strong id="dExposure">—</strong><small id="dOpenCount">Nessuna posizione aperta</small></div>
+        <div class="detail-card"><span>P&amp;L realizzato</span><strong id="dRealized">—</strong><small id="dBestTrade">Nessun trade chiuso</small></div>
+        <div class="detail-card"><span>P&amp;L aperto</span><strong id="dUnrealized">—</strong><small id="dWorstTrade">Nessun drawdown rilevato</small></div>
+        <div class="detail-card"><span>Segnali</span><strong id="dSignalMix">—</strong><small id="dAvgScore">Nessun segnale attivo</small></div>
+        <div class="detail-card"><span>Brain</span><strong id="dBrainHealth">—</strong><small id="dDataFeed">Feed non inizializzato</small></div>
+      </div>
+    </div>
+  </div>
+
   <!-- POSITIONS -->
-  <div class="section-hdr">Posizioni Aperte <span class="info-i" data-tip="Posizioni annotate dal bot\\nSL = Stop Loss (chiude in perdita)\\nTP = Take Profit (chiude in profitto)\\n⬆ = Trailing Stop attivo">ⓘ</span></div>
+  <div class="section-hdr">Posizioni Aperte <span class="info-i" data-tip="Posizioni annotate dal bot\\nSL = Stop Loss\\nTP = Take Profit\\nTrailing = stop dinamico attivo">ⓘ</span></div>
   <div id="posContainer"><div class="empty-state">Nessuna posizione aperta</div></div>
 
   <!-- WATCHLIST -->
@@ -1241,7 +1305,7 @@ tr:hover td{background:var(--card2)}
       <th style="text-align:right">Prezzo <span class="info-i" data-tip="Ultimo prezzo in USD">ⓘ</span></th>
       <th style="text-align:right">Score <span class="info-i" data-tip="Punteggio da -3 a +3\\nSopra +0.8 = BUY\\nSotto -0.8 = SELL">ⓘ</span></th>
       <th style="text-align:right">RSI <span class="info-i" data-tip="0-100. Sotto 30 = ipervenduto\\nSopra 70 = ipercomprato">ⓘ</span></th>
-      <th style="text-align:center">Segnale <span class="info-i" data-tip="▲ BUY = compra\\n⏳ ATTESA = filtrato\\n— HOLD = aspetta\\n▼ SELL = vendi">ⓘ</span></th>
+      <th style="text-align:center">Segnale <span class="info-i" data-tip="BUY = compra\\nWATCH = segnale promettente ma filtrato\\nHOLD = nessuna azione\\nSELL = pressione ribassista">ⓘ</span></th>
     </tr></thead>
     <tbody id="wlBody"><tr><td colspan="5" style="color:var(--text3);text-align:center">Premi Scan per analizzare</td></tr></tbody>
   </table>
@@ -1270,17 +1334,17 @@ tr:hover td{background:var(--card2)}
 
 <!-- SIDEBAR -->
 <div class="sidebar">
-  <button class="side-btn btn-start" onclick="doScan()" id="scanBtn">🔍 SCAN NOW</button>
+  <button class="side-btn btn-start" onclick="doScan()" id="scanBtn"><i data-lucide="search"></i><span class="btn-label">Esegui scan</span></button>
   <hr class="sep">
-  <button class="side-btn btn-action" onclick="closeAllModal()">📦 Chiudi tutte</button>
+  <button class="side-btn btn-action" onclick="closeAllModal()"><i data-lucide="folder-output"></i><span class="btn-label">Chiudi tutte</span></button>
   <hr class="sep">
-  <button class="side-btn btn-calc" onclick="showCalc()">💰 Profitto netto</button>
+  <button class="side-btn btn-calc" onclick="showCalc()"><i data-lucide="calculator"></i><span class="btn-label">Profitto netto</span></button>
   <hr class="sep">
-  <button class="side-btn btn-settings" onclick="showSettings()">⚙️ Impostazioni</button>
+  <button class="side-btn btn-settings" onclick="showSettings()"><i data-lucide="settings-2"></i><span class="btn-label">Impostazioni</span></button>
   <hr class="sep">
-  <button class="side-btn btn-danger" onclick="resetAll()">🗑 Reset</button>
+  <button class="side-btn btn-danger" onclick="resetAll()"><i data-lucide="trash-2"></i><span class="btn-label">Reset</span></button>
   <hr class="sep">
-  <button class="side-btn" onclick="location.href=\\'/api/logout\\'">🚪 Logout</button>
+  <button class="side-btn" onclick="location.href=\\'/api/logout\\'"><i data-lucide="log-out"></i><span class="btn-label">Logout</span></button>
   <hr class="sep">
 
   <div class="side-label">Statistiche</div>
@@ -1290,7 +1354,7 @@ tr:hover td{background:var(--card2)}
 
   <hr class="sep">
   <div class="brain-section">
-    <div class="brain-label">🧠 Brain <span class="info-i" data-tip="Auto-apprendimento.\\nDopo ogni trade, aggiusta i pesi\\ndegli indicatori. Più trade fa,\\npiù diventa preciso.">ⓘ</span></div>
+    <div class="brain-label"><i data-lucide="brain"></i>Brain <span class="info-i" data-tip="Auto-apprendimento.\\nDopo ogni trade, aggiusta i pesi\\ndegli indicatori. Più trade fa,\\npiù diventa preciso.">ⓘ</span></div>
     <div class="side-stat" id="bConf">Confidenza: 0%</div>
     <div class="side-stat" id="bTrained">Addestrato: 0 trade</div>
     <div class="side-stat" style="font-size:.75rem;color:var(--text3);word-break:break-all" id="bLast"></div>
@@ -1301,21 +1365,21 @@ tr:hover td{background:var(--card2)}
 <!-- PROFIT CALCULATOR MODAL -->
 <div class="modal-bg" id="calcModal">
 <div class="modal">
-  <h2>💰 Profitto Netto</h2>
+  <h2 class="modal-title"><i data-lucide="calculator"></i><span>Profitto Netto</span></h2>
   <p style="font-size:.78rem;color:var(--text3);margin-bottom:14px">Calcolo automatico per mercato. Tasse e costi applicati in base al tipo di asset.</p>
 
   <div style="display:flex;gap:8px;margin-bottom:14px">
-    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" id="calcModeAuto">📊 Auto (da bot)</button>
-    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" id="calcModeManual">✏️ Manuale</button>
+    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" id="calcModeAuto">Auto (da bot)</button>
+    <button class="side-btn btn-action" style="flex:1;text-align:center;justify-content:center;font-size:.78rem" id="calcModeManual">Manuale</button>
   </div>
 
   <div id="calcManualFields" style="display:none">
     <label>Profitto lordo (€)</label><input type="number" id="cGross" value="0">
     <label>Mercato</label>
     <select id="cMarket">
-      <option value="us">🇺🇸 USA (Alpaca)</option>
-      <option value="eu">🇪🇺 Europa (MI/DE/PA/AS)</option>
-      <option value="crypto">🪙 Crypto</option>
+      <option value="us">USA (Alpaca)</option>
+      <option value="eu">Europa (MI/DE/PA/AS)</option>
+      <option value="crypto">Crypto</option>
     </select>
     <label>Giorni di detenzione</label><input type="number" id="cDays" value="365" min="1" max="365">
     <label>Capitale investito (€)</label><input type="number" id="cCap" value="5000">
@@ -1329,25 +1393,25 @@ tr:hover td{background:var(--card2)}
   </div>
 
   <div style="display:flex;gap:8px;margin-top:14px">
-    <button class="side-btn btn-start" style="flex:1" onclick="doCalc()">📊 Calcola</button>
+    <button class="side-btn btn-start" style="flex:1" onclick="doCalc()">Calcola</button>
     <button class="side-btn btn-action" style="flex:1" onclick="hideCalc()">Chiudi</button>
   </div>
-  <p style="font-size:.68rem;color:var(--text4);margin-top:10px;text-align:center">⚠ Stime indicative — consulta un commercialista per la tua situazione</p>
+  <p style="font-size:.68rem;color:var(--text4);margin-top:10px;text-align:center">Stime indicative — consulta un professionista per la tua situazione fiscale</p>
 </div>
 </div>
 
 <!-- SETTINGS MODAL -->
 <div class="modal-bg" id="settingsModal">
 <div class="modal">
-  <h2>⚙️ Impostazioni</h2>
+  <h2 class="modal-title"><i data-lucide="settings-2"></i><span>Impostazioni</span></h2>
   <p style="font-size:.8rem;color:var(--text3);margin-bottom:12px">Modifica i parametri del bot. Le modifiche si applicano dal prossimo scan.</p>
   <div id="settingsFields"></div>
   <div style="margin-top:6px;padding:10px;background:var(--card2);border-radius:6px;display:none" id="settingsSaved">
-    <span class="g">✓ Impostazioni salvate</span>
+    <span class="g">Impostazioni salvate</span>
   </div>
   <div style="display:flex;gap:8px;margin-top:14px">
-    <button class="side-btn btn-start" style="flex:1" onclick="saveSettings()">💾 Salva</button>
-    <button class="side-btn btn-action" style="flex:1" onclick="resetSettings()">↩ Reset default</button>
+    <button class="side-btn btn-start" style="flex:1" onclick="saveSettings()">Salva</button>
+    <button class="side-btn btn-action" style="flex:1" onclick="resetSettings()">Ripristina default</button>
     <button class="side-btn btn-action" style="flex:1" onclick="hideSettings()">Chiudi</button>
   </div>
 </div>
@@ -1355,7 +1419,138 @@ tr:hover td{background:var(--card2)}
 
 <script>
 const API=window.location.origin+"/api";
-let logs=[];let scanCount=0;let lastSeenScan=0;
+let logs=[];let lastSeenScan=0;let performanceChart=null;
+
+function renderIcons(){
+  if(window.lucide&&window.lucide.createIcons) window.lucide.createIcons();
+}
+
+function setButtonLabel(id,label,busy){
+  const btn=document.getElementById(id);
+  if(!btn) return;
+  const labelEl=btn.querySelector(".btn-label");
+  if(labelEl) labelEl.textContent=label;
+  btn.disabled=!!busy;
+  btn.classList.toggle("is-busy",!!busy);
+}
+
+function fmtSignedEuro(v){return (v>=0?"+":"")+"€"+v.toFixed(2);}
+function fmtPlainEuro(v){return "€"+v.toFixed(2);}
+
+function timeAgo(date){
+  const mins=Math.max(0,Math.floor((Date.now()-date.getTime())/60000));
+  if(mins<1) return "Aggiornato ora";
+  if(mins===1) return "1 minuto fa";
+  if(mins<60) return mins+" minuti fa";
+  const hours=Math.floor(mins/60);
+  if(hours===1) return "1 ora fa";
+  return hours+" ore fa";
+}
+
+function getTickerMarket(ticker){
+  if((ticker||"").includes("-USD")) return "crypto";
+  if(/\.(MI|DE|PA|AS|L|MC)$/.test(ticker||"")) return "eu";
+  return "us";
+}
+
+function renderPerformanceChart(closedTrades,totalPnl){
+  const canvas=document.getElementById("equityChart");
+  if(!canvas||!window.Chart) return;
+
+  const labels=[];
+  const series=[];
+  let running=0;
+  [...(closedTrades||[])].reverse().forEach((trade)=>{
+    running+=(trade.pnl||0);
+    const dt=new Date(trade.closed_at||trade.opened_at||Date.now());
+    labels.push(dt.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"}));
+    series.push(+running.toFixed(2));
+  });
+
+  if(!labels.length){
+    labels.push("Ora");
+    series.push(+(totalPnl||0).toFixed(2));
+  }else{
+    labels.push("Ora");
+    series.push(+(totalPnl||0).toFixed(2));
+  }
+
+  if(performanceChart) performanceChart.destroy();
+  const ctx=canvas.getContext("2d");
+  const gradient=ctx.createLinearGradient(0,0,0,260);
+  gradient.addColorStop(0,"rgba(37,99,235,.35)");
+  gradient.addColorStop(1,"rgba(37,99,235,0)");
+
+  performanceChart=new Chart(ctx,{
+    type:"line",
+    data:{
+      labels,
+      datasets:[{
+        label:"P&L cumulativo",
+        data:series,
+        borderColor:"#3b82f6",
+        backgroundColor:gradient,
+        fill:true,
+        tension:.35,
+        pointRadius:series.length>2?2:4,
+        pointHoverRadius:4,
+        borderWidth:2
+      }]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          backgroundColor:"#0d1726",
+          borderColor:"#30445e",
+          borderWidth:1,
+          displayColors:false,
+          callbacks:{label:(ctx)=>fmtPlainEuro(ctx.parsed.y)}
+        }
+      },
+      scales:{
+        x:{grid:{display:false},ticks:{color:"#64748b",maxRotation:0,autoSkip:true}},
+        y:{grid:{color:"rgba(48,68,94,.25)"},ticks:{color:"#64748b",callback:(value)=>"€"+Number(value).toFixed(0)}}
+      }
+    }
+  });
+}
+
+function renderOverview(d,scores){
+  const positions=d.positions||[];
+  const closedTrades=d.closedTrades||[];
+  const lastScan=d.lastScanAt?new Date(d.lastScanAt):null;
+  const openValue=positions.reduce((sum,p)=>sum+((p.current_price||p.entry_price)*p.shares),0);
+  const unrealized=positions.reduce((sum,p)=>sum+(((p.current_price||p.entry_price)-p.entry_price)*p.shares),0);
+  const realized=closedTrades.reduce((sum,t)=>sum+(t.pnl||0),0);
+  const bestTrade=closedTrades.reduce((best,t)=>!best||(t.pnl||0)>(best.pnl||0)?t:best,null);
+  const worstTrade=closedTrades.reduce((worst,t)=>!worst||(t.pnl||0)<(worst.pnl||0)?t:worst,null);
+  const buySignals=scores.filter((s)=>s.signal===1).length;
+  const riskSignals=scores.filter((s)=>s.score<=-0.5).length;
+  const avgScore=scores.length?scores.reduce((sum,s)=>sum+s.score,0)/scores.length:0;
+  const brainConfidence=(d.brain?.confidence||0).toFixed(0)+"%";
+
+  document.getElementById("dLastScan").textContent=lastScan?lastScan.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}):"In attesa";
+  document.getElementById("dScanAge").textContent=lastScan?timeAgo(lastScan):"Nessuna attività recente";
+  document.getElementById("dExposure").textContent=fmtPlainEuro(openValue);
+  document.getElementById("dOpenCount").textContent=positions.length+" posizioni aperte";
+  document.getElementById("dRealized").textContent=fmtSignedEuro(realized);
+  document.getElementById("dRealized").className=realized>=0?"g":"r";
+  document.getElementById("dBestTrade").textContent=bestTrade?"Miglior close: "+bestTrade.name+" "+fmtSignedEuro(bestTrade.pnl):"Nessun trade chiuso";
+  document.getElementById("dUnrealized").textContent=fmtSignedEuro(unrealized);
+  document.getElementById("dUnrealized").className=unrealized>=0?"g":"r";
+  document.getElementById("dWorstTrade").textContent=worstTrade?"Peggior close: "+worstTrade.name+" "+fmtSignedEuro(worstTrade.pnl):"Nessun drawdown chiuso";
+  document.getElementById("dSignalMix").textContent=buySignals+" BUY / "+riskSignals+" RISK";
+  document.getElementById("dAvgScore").textContent=scores.length?"Score medio "+avgScore.toFixed(2):"Nessun segnale disponibile";
+  document.getElementById("dBrainHealth").textContent=brainConfidence;
+  document.getElementById("dDataFeed").textContent=(d.spyStatus?(d.spyStatus.bullish?"Regime costruttivo":"Regime prudente")+" · ":"")+(d.dataSource||"Yahoo Finance");
+  document.getElementById("overviewStatus").textContent=d.spyStatus?(d.spyStatus.bullish?"Mercato costruttivo":"Mercato prudente"):"Monitoraggio attivo";
+  document.getElementById("perfMeta").textContent=lastScan?"Aggiornato "+lastScan.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}):"Storico in attesa";
+
+  renderPerformanceChart(closedTrades,d.pnl||0);
+}
 
 async function load(){
   const bar=document.getElementById("refreshBar");bar.style.width="30%";
@@ -1363,7 +1558,7 @@ async function load(){
     const r=await fetch(API+"/status");
     if(r.status===401){window.location.href="/login";return;}
     const d=await r.json();bar.style.width="80%";
-    if(d.error){addLog("❌ Status: "+d.error,"sell");bar.style.width="0";return;}
+    if(d.error){addLog("Status error: "+d.error,"sell");bar.style.width="0";return;}
 
     // Source
     document.getElementById("srcName").textContent=d.dataSource||"Yahoo";
@@ -1396,7 +1591,7 @@ async function load(){
         const pl=((cur-p.entry_price)*p.shares);
         const pct=((cur-p.entry_price)/p.entry_price*100);
         const up=pl>=0;
-        const trail=p.trailing_active?" ⬆":"";
+        const trail=p.trailing_active?'<span class="trail-pill">Trailing</span>':"";
         const sh=p.shares%1===0?p.shares:p.shares.toFixed(4);
         const curVal=(cur*p.shares);
         const opened=p.opened_at?new Date(p.opened_at).toLocaleString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
@@ -1413,7 +1608,7 @@ async function load(){
           +'<div class="pos-extra-row"><span class="pos-extra-label">Valore attuale</span><span class="pos-extra-val '+(up?"g":"r")+'">€'+curVal.toFixed(2)+'</span></div>'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Aperta il</span><span class="pos-extra-val">'+opened+'</span></div>'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Score ingresso</span><span class="pos-extra-val">'+(p.score_at_entry||0).toFixed(1)+'</span></div>'
-          +'<div class="pos-extra-row"><span class="pos-extra-label">Trailing Stop</span><span class="pos-extra-val">'+(p.trailing_active?"<span class=g>Attivo ⬆</span>":"No")+'</span></div>'
+          +'<div class="pos-extra-row"><span class="pos-extra-label">Trailing Stop</span><span class="pos-extra-val">'+(p.trailing_active?"<span class=g>Attivo</span>":"No")+'</span></div>'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Indicatori</span><span class="pos-extra-val" style="font-size:.75rem">'+indicators+'</span></div>'
           +'</div></div>';
       }).join("");
@@ -1430,17 +1625,17 @@ async function load(){
     if(scores.length){
       document.getElementById("wlBody").innerHTML=scores.map((s,i)=>{
         let badge,cls;
-        if(s.signal===1){badge="▲ BUY";cls="b-buy";}
-        else if(s.signal===-1){badge="▼ SELL";cls="b-sell";}
-        else if(s.score>=0.5){badge="⏳ ATTESA";cls="b-wait";}
-        else if(s.score<=-0.5){badge="⏳ RIBASSO";cls="b-down";}
-        else{badge="— HOLD";cls="b-hold";}
-        const isCrypto=s.ticker.includes("-USD");
-        const icon=isCrypto?"🪙":"📊";
+        if(s.signal===1){badge="BUY";cls="b-buy";}
+        else if(s.signal===-1){badge="SELL";cls="b-sell";}
+        else if(s.score>=0.5){badge="WATCH";cls="b-wait";}
+        else if(s.score<=-0.5){badge="RISK";cls="b-down";}
+        else{badge="HOLD";cls="b-hold";}
+        const market=getTickerMarket(s.ticker);
+        const marketLabel=market==="crypto"?"CRYPTO":(market==="eu"?"EU":"USA");
         const rsiCls=s.rsi<35?"g":(s.rsi>65?"r":"");
         const scCls=s.score>=0.8?"g":(s.score>=0.5?"y":(s.score<=-0.8?"r":""));
         const dotCls=s.signal===1?"g":(s.signal===-1?"r":(s.score>=0.5?"y":""));
-        return '<tr><td><span class="'+dotCls+'">● </span>'+icon+' '+s.ticker+'</td>'
+        return '<tr><td><div class="asset-cell"><span class="asset-marker '+market+'"></span><div class="asset-main"><span class="asset-ticker">'+s.ticker+'</span><span class="asset-kind">'+marketLabel+'</span></div></div></td>'
           +'<td style="text-align:right" class="mono">$'+s.price.toFixed(2)+'</td>'
           +'<td style="text-align:right" class="mono '+scCls+'">'+s.score.toFixed(1)+'</td>'
           +'<td style="text-align:right;font-weight:700" class="'+rsiCls+'">'+s.rsi.toFixed(0)+'</td>'
@@ -1457,6 +1652,8 @@ async function load(){
     document.getElementById("sWr").style.color=st.wr>=50?"var(--green)":(st.total?"var(--red)":"var(--text2)");
     document.getElementById("sPnl").textContent="P&L: "+(closedPnl>=0?"+":"")+"€"+closedPnl.toFixed(2);
     document.getElementById("sPnl").style.color=closedPnl>=0?"var(--green)":"var(--red)";
+
+    renderOverview(d,scores);
 
     // Trades history
     const tb=document.getElementById("tradesBody");
@@ -1490,7 +1687,7 @@ async function load(){
       const ago=Math.floor((Date.now()-scanDate.getTime())/60000);
       const dot=document.getElementById("scanDot");
       const lbl=document.getElementById("scanLabel");
-      if(ago<10){dot.className="scan-dot";lbl.textContent="Auto ✓ Ultima: "+scanDate.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});}
+      if(ago<10){dot.className="scan-dot";lbl.textContent="Auto · Ultima: "+scanDate.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});}
       else if(ago<30){dot.className="scan-dot stale";lbl.textContent="Scan "+ago+" min fa";}
       else{dot.className="scan-dot offline";lbl.textContent="Nessuna scan da "+ago+" min";}
       document.getElementById("scanTime").textContent="Ultima scan: "+scanDate.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
@@ -1503,18 +1700,18 @@ async function load(){
         // First load: show last 5 for context
         d.scanActivity.slice(-5).forEach(a=>{
           const dt=new Date(a.t).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
-          let msg="🤖 Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" pos, SPY: "+a.spy;
-          if(a.buys.length) msg+=" | 📝 BUY: "+a.buys.join(", ");
-          if(a.closes.length) a.closes.forEach(c=>{ msg+=" | "+(c.pnl>=0?"🟢":"🔴")+" CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
+          let msg="Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" posizioni, SPY: "+a.spy;
+          if(a.buys.length) msg+=" | BUY: "+a.buys.join(", ");
+          if(a.closes.length) a.closes.forEach(c=>{ msg+=" | CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
           addLog(msg,a.buys.length?"buy":(a.closes.length?"sell":""));
         });
       } else if(newEntries.length){
         // Subsequent loads (every 30s): only new scans
         newEntries.forEach(a=>{
           const dt=new Date(a.t).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
-          let msg="🤖 Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" pos, SPY: "+a.spy;
-          if(a.buys.length) msg+=" | 📝 BUY: "+a.buys.join(", ");
-          if(a.closes.length) a.closes.forEach(c=>{ msg+=" | "+(c.pnl>=0?"🟢":"🔴")+" CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
+          let msg="Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" posizioni, SPY: "+a.spy;
+          if(a.buys.length) msg+=" | BUY: "+a.buys.join(", ");
+          if(a.closes.length) a.closes.forEach(c=>{ msg+=" | CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
           addLog(msg,a.buys.length?"buy":(a.closes.length?"sell":""));
         });
       }
@@ -1525,7 +1722,7 @@ async function load(){
     if(d.spyStatus){
       document.getElementById("vSpy").textContent="$"+d.spyStatus.price.toFixed(2);
       document.getElementById("vSpy").className="stat-value "+(d.spyStatus.bullish?"g":"r");
-      document.getElementById("vSpyStatus").textContent=d.spyStatus.bullish?"BULL ▲":"BEAR ▼";
+      document.getElementById("vSpyStatus").textContent=d.spyStatus.bullish?"Bullish":"Bearish";
       document.getElementById("vSpyStatus").className="stat-sub "+(d.spyStatus.bullish?"g":"r");
       const bb=document.getElementById("bearBanner");
       if(!d.spyStatus.bullish){bb.classList.add("show");}else{bb.classList.remove("show");}
@@ -1538,7 +1735,7 @@ async function load(){
     bar.style.width="100%";setTimeout(()=>{bar.style.width="0"},400);
   }catch(e){
     document.getElementById("refreshBar").style.width="0";
-    addLog("❌ Errore: "+e.message,"sell");
+    addLog("Errore: "+e.message,"sell");
   }
 }
 
@@ -1558,25 +1755,24 @@ function togglePos(i){
 
 async function doScan(){
   const btn=document.getElementById("scanBtn");
-  btn.textContent="⏳ Scansione...";btn.disabled=true;
-  addLog("🔍 Scan avviato...","");
+  setButtonLabel("scanBtn","Scansione in corso",true);
+  addLog("Scan manuale avviata","");
   try{
     const r=await fetch(API+"/scan");
-    if(!r.ok){const err=await r.text();addLog("❌ Scan errore "+r.status+": "+err,"sell");btn.textContent="🔍 SCAN NOW";btn.disabled=false;return;}
+    if(!r.ok){const err=await r.text();addLog("Scan error "+r.status+": "+err,"sell");setButtonLabel("scanBtn","Esegui scan",false);return;}
     const d=await r.json();
-    if(d.error){addLog("❌ "+d.error,"sell");btn.textContent="🔍 SCAN NOW";btn.disabled=false;return;}
-    scanCount++;
-    document.getElementById("cycleLabel").textContent="Ciclo "+scanCount;
-    if(d.buys?.length) d.buys.forEach(b=>addLog("📝 BUY "+b.name+": "+b.shares+"sh @ $"+b.entry_price.toFixed(2),"buy"));
-    if(d.closes?.length) d.closes.forEach(c=>addLog((c.pnl>=0?"🟢":"🔴")+" CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]",c.pnl>=0?"buy":"sell"));
-    if(d.scores?.length) addLog("📊 "+d.scores.length+" asset scansionati | "+d.positions?.length+" posizioni","");
-    if(d.spyStatus) addLog("🏛 SPY: $"+d.spyStatus.price+" → "+(d.spyStatus.bullish?"BULLISH ✅":"BEARISH ⛔"),d.spyStatus.bullish?"buy":"sell");
+    if(d.error){addLog("Scan error: "+d.error,"sell");setButtonLabel("scanBtn","Esegui scan",false);return;}
+    document.getElementById("cycleLabel").textContent="Ciclo "+(d.scanNumber||d.totalScans||0);
+    if(d.buys?.length) d.buys.forEach(b=>addLog("BUY "+b.name+": "+b.shares+"sh @ $"+b.entry_price.toFixed(2),"buy"));
+    if(d.closes?.length) d.closes.forEach(c=>addLog("CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]",c.pnl>=0?"buy":"sell"));
+    if(d.scores?.length) addLog("Scan completata: "+d.scores.length+" asset, "+d.positions?.length+" posizioni","");
+    if(d.spyStatus) addLog("Regime SPY: "+(d.spyStatus.bullish?"bullish":"bearish")+" @ $"+d.spyStatus.price,d.spyStatus.bullish?"buy":"sell");
 
     // Update SPY card
     if(d.spyStatus){
       document.getElementById("vSpy").textContent="$"+d.spyStatus.price;
       document.getElementById("vSpy").className="stat-value "+(d.spyStatus.bullish?"g":"r");
-      document.getElementById("vSpyStatus").textContent=d.spyStatus.bullish?"BULL ▲":"BEAR ▼";
+      document.getElementById("vSpyStatus").textContent=d.spyStatus.bullish?"Bullish":"Bearish";
       document.getElementById("vSpyStatus").className="stat-sub "+(d.spyStatus.bullish?"g":"r");
       // Show/hide bearish banner
       const bb=document.getElementById("bearBanner");
@@ -1588,26 +1784,26 @@ async function doScan(){
       pill.className="pill "+(isOpen?"pill-open":"pill-closed");
     }
     load();
-  }catch(e){addLog("❌ "+e.message,"sell");}
-  btn.textContent="🔍 SCAN NOW";btn.disabled=false;
+  }catch(e){addLog("Errore: "+e.message,"sell");}
+  setButtonLabel("scanBtn","Esegui scan",false);
 }
 
 async function closeTicker(t){
   if(!confirm("Chiudere "+t+"?"))return;
-  addLog("Chiusura "+t+"...","");
+  addLog("Chiusura posizione "+t+" in corso","");
   await fetch(API+"/close",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ticker:t})});
   load();
 }
 
 function closeAllModal(){
   if(!confirm("Chiudere TUTTE le posizioni?"))return;
-  addLog("Chiusura tutte...","warn");
+  addLog("Chiusura di tutte le posizioni in corso","warn");
   fetch(API+"/close-all",{method:"POST"}).then(()=>load());
 }
 
 function resetAll(){
   if(!confirm("RESET completo?\\nRiparti da €5.000"))return;
-  addLog("🗑 Reset...","sell");
+  addLog("Reset completo in corso","sell");
   fetch(API+"/reset",{method:"POST"}).then(()=>{logs=[];load();});
 }
 
@@ -1641,15 +1837,15 @@ function calcTaxForMarket(gross, investedCap, days, market){
     ivafe=investedCap*0.002*(days/365);
     // Spread cambio: solo sul profitto (la conversione avviene al prelievo)
     fx=Math.abs(gross)*0.005;
-    label="🇺🇸 USA";
+    label="USA";
   } else if(market==="eu"){
     ivafe=0; fx=0;
-    label="🇪🇺 EU";
+    label="EU";
   } else {
     // Crypto: IVAFE su valore detenuto, no spread cambio (già in USD/EUR)
     ivafe=investedCap*0.002*(days/365);
     fx=0;
-    label="🪙 Crypto";
+    label="Crypto";
   }
   return {tax, ivafe, fx, total: tax+ivafe+fx, net: gross-tax-ivafe-fx, label, market};
 }
@@ -1744,7 +1940,7 @@ async function showSettings(){
       const displayVal=m.pct?(v*100).toFixed(1):v;
       return '<label>'+label+'</label><input type="number" step="'+step+'" id="cfg_'+k+'" value="'+displayVal+'" data-key="'+k+'" data-pct="'+(m.pct?"1":"0")+'">';
     }).join("");
-  }catch(e){addLog("❌ Errore settings: "+e.message,"sell");}
+  }catch(e){addLog("Errore impostazioni: "+e.message,"sell");}
 }
 function hideSettings(){document.getElementById("settingsModal").style.display="none";}
 
@@ -1762,10 +1958,10 @@ async function saveSettings(){
     const d=await r.json();
     if(d.success){
       document.getElementById("settingsSaved").style.display="block";
-      addLog("⚙️ Settings salvati: "+d.updated.join(", "),"buy");
+      addLog("Impostazioni salvate: "+d.updated.join(", "),"buy");
       setTimeout(()=>{document.getElementById("settingsSaved").style.display="none";},3000);
     }
-  }catch(e){addLog("❌ Errore salvataggio: "+e.message,"sell");}
+  }catch(e){addLog("Errore salvataggio: "+e.message,"sell");}
 }
 
 async function resetSettings(){
@@ -1774,13 +1970,14 @@ async function resetSettings(){
     const defaults={initial_capital:5000,max_positions:3,risk_per_trade:0.02,stop_loss_pct:0.025,trailing_activation:0.015,trailing_distance:0.012,cooldown_minutes:30,learn_rate:0.05,min_weight:0.05,max_weight:2.0,min_trades_to_learn:5,spread_slippage_pct:0.001};
     const r=await fetch(API+"/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(defaults)});
     const d=await r.json();
-    if(d.success){addLog("⚙️ Settings ripristinati ai default","buy");showSettings();}
-  }catch(e){addLog("❌ Errore reset: "+e.message,"sell");}
+    if(d.success){addLog("Impostazioni ripristinate ai default","buy");showSettings();}
+  }catch(e){addLog("Errore reset impostazioni: "+e.message,"sell");}
 }
 
 // Init
 load();
 setInterval(load,30000);
+renderIcons();
 addLog("Dashboard caricata","");
 </script></body></html>`;
 
