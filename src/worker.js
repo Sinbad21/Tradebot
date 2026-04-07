@@ -1601,7 +1601,7 @@ async function load(){
           +'<div class="pos-name">'+p.name+trail+'</div>'
           +'<div class="pos-detail mono">'+sh+'sh &middot; $'+p.entry_price.toFixed(2)+' &rarr; $'+cur.toFixed(2)+'</div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
-          +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
+          +'<div class="pos-levels"><span >SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixclass="r"ed(2)+'</span></div>'
           +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')">Chiudi</button></div>'
           +'<div class="pos-extra" id="posExtra'+i+'">'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Costo apertura</span><span class="pos-extra-val">€'+p.cost.toFixed(2)+'</span></div>'
