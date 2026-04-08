@@ -701,10 +701,17 @@ async function scan(db, env) {
     await db.prepare("INSERT OR REPLACE INTO config VALUES ('scan_count', ?)").bind(newCount.toString()).run();
     results.scanNumber = newCount;
 
+    const openPnl = updatedPositions.reduce((sum, p) => sum + (((p.current_price || p.entry_price) - p.entry_price) * p.shares), 0);
+    const totalPnl = +((results.equity || 0) - cfg.initial_capital).toFixed(2);
+
     // Build activity entry
     const entry = {
       n: newCount,
       t: now,
+      equity: +(results.equity || 0).toFixed(2),
+      cash: +(results.capital || 0).toFixed(2),
+      pnl: totalPnl,
+      openPnl: +openPnl.toFixed(2),
       scored: results.scores.length,
       buys: results.buys.map(b => b.name),
       closes: results.closes.map(c => ({ name: c.name, pnl: c.pnl, reason: c.reason })),
@@ -712,14 +719,14 @@ async function scan(db, env) {
       pos: updatedPositions.length,
     };
 
-    // Keep last 20 activity entries in config
+    // Keep a longer intraday history so the chart can show more points
     let history = [];
     try {
       const raw = (await db.prepare("SELECT value FROM config WHERE key='scan_activity'").first())?.value;
       if (raw) history = JSON.parse(raw);
     } catch (e) {}
     history.push(entry);
-    if (history.length > 20) history = history.slice(-20);
+    if (history.length > 288) history = history.slice(-288);
     await db.prepare("INSERT OR REPLACE INTO config VALUES ('scan_activity', ?)").bind(JSON.stringify(history)).run();
   } catch (e) {}
 
@@ -1453,24 +1460,34 @@ function getTickerMarket(ticker){
   return "us";
 }
 
-function renderPerformanceChart(closedTrades,totalPnl){
+function renderPerformanceChart(scanActivity,closedTrades,totalPnl){
   const canvas=document.getElementById("equityChart");
   if(!canvas||!window.Chart) return;
 
   const labels=[];
   const series=[];
-  let running=0;
-  [...(closedTrades||[])].reverse().forEach((trade)=>{
-    running+=(trade.pnl||0);
-    const dt=new Date(trade.closed_at||trade.opened_at||Date.now());
-    labels.push(dt.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"}));
-    series.push(+running.toFixed(2));
-  });
+  const scanSeries=(scanActivity||[]).filter((entry)=>typeof entry.pnl==="number"&&!Number.isNaN(entry.pnl));
+
+  if(scanSeries.length>=2){
+    scanSeries.forEach((entry)=>{
+      const dt=new Date(entry.t||Date.now());
+      labels.push(dt.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}));
+      series.push(+entry.pnl.toFixed(2));
+    });
+  } else {
+    let running=0;
+    [...(closedTrades||[])].reverse().forEach((trade)=>{
+      running+=(trade.pnl||0);
+      const dt=new Date(trade.closed_at||trade.opened_at||Date.now());
+      labels.push(dt.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"}));
+      series.push(+running.toFixed(2));
+    });
+  }
 
   if(!labels.length){
     labels.push("Ora");
     series.push(+(totalPnl||0).toFixed(2));
-  }else{
+  }else if(series[series.length-1]!==+(totalPnl||0).toFixed(2)){
     labels.push("Ora");
     series.push(+(totalPnl||0).toFixed(2));
   }
@@ -1521,6 +1538,7 @@ function renderPerformanceChart(closedTrades,totalPnl){
 function renderOverview(d,scores){
   const positions=d.positions||[];
   const closedTrades=d.closedTrades||[];
+  const scanActivity=d.scanActivity||[];
   const lastScan=d.lastScanAt?new Date(d.lastScanAt):null;
   const openValue=positions.reduce((sum,p)=>sum+((p.current_price||p.entry_price)*p.shares),0);
   const unrealized=positions.reduce((sum,p)=>sum+(((p.current_price||p.entry_price)-p.entry_price)*p.shares),0);
@@ -1547,9 +1565,10 @@ function renderOverview(d,scores){
   document.getElementById("dBrainHealth").textContent=brainConfidence;
   document.getElementById("dDataFeed").textContent=(d.spyStatus?(d.spyStatus.bullish?"Regime costruttivo":"Regime prudente")+" · ":"")+(d.dataSource||"Yahoo Finance");
   document.getElementById("overviewStatus").textContent=d.spyStatus?(d.spyStatus.bullish?"Mercato costruttivo":"Mercato prudente"):"Monitoraggio attivo";
-  document.getElementById("perfMeta").textContent=lastScan?"Aggiornato "+lastScan.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}):"Storico in attesa";
+  const pointCount=(scanActivity||[]).filter((entry)=>typeof entry.pnl==="number").length;
+  document.getElementById("perfMeta").textContent=pointCount>=2?(pointCount+" punti"):(lastScan?"Aggiornato "+lastScan.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}):"Storico in attesa");
 
-  renderPerformanceChart(closedTrades,d.pnl||0);
+  renderPerformanceChart(scanActivity,closedTrades,d.pnl||0);
 }
 
 async function load(){
@@ -1601,7 +1620,7 @@ async function load(){
           +'<div class="pos-name">'+p.name+trail+'</div>'
           +'<div class="pos-detail mono">'+sh+'sh &middot; $'+p.entry_price.toFixed(2)+' &rarr; $'+cur.toFixed(2)+'</div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
-          +'<div class="pos-levels"><span >SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixclass="r"ed(2)+'</span></div>'
+          +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
           +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')">Chiudi</button></div>'
           +'<div class="pos-extra" id="posExtra'+i+'">'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Costo apertura</span><span class="pos-extra-val">€'+p.cost.toFixed(2)+'</span></div>'
