@@ -76,17 +76,34 @@ const WATCHLIST = {
   "SAP.DE": "SAP", "SIE.DE": "Siemens", "BAS.DE": "BASF",
   "MC.PA": "LVMH", "OR.PA": "L'Or\u00e9al", "TTE.PA": "TotalEnergies",
   "ASML.AS": "ASML",
-  // Crypto — 27 coins
+  // Crypto — 26 coins
   "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana",
   "XRP-USD": "XRP", "DOGE-USD": "Dogecoin", "ADA-USD": "Cardano",
   "BNB-USD": "BNB", "AVAX-USD": "Avalanche", "DOT-USD": "Polkadot",
   "LINK-USD": "Chainlink", "MATIC-USD": "Polygon", "UNI-USD": "Uniswap",
   "ATOM-USD": "Cosmos", "LTC-USD": "Litecoin", "NEAR-USD": "NEAR",
-  "ARB-USD": "Arbitrum", "OP-USD": "Optimism", "APT-USD": "Aptos",
+  "OP-USD": "Optimism", "APT-USD": "Aptos",
   "SUI-USD": "SUI", "INJ-USD": "Injective", "RENDER-USD": "Render",
   "FET-USD": "Fetch.ai", "PEPE-USD": "Pepe", "SHIB-USD": "Shiba Inu",
   "TON-USD": "Toncoin", "TRX-USD": "Tron", "FIL-USD": "Filecoin",
 };
+
+const LOW_PRICE_CRYPTO_TICKERS = new Set(["PEPE-USD", "SHIB-USD"]);
+
+function getPriceDecimals(price) {
+  if (price < 0.01) return 8;
+  if (price < 1) return 6;
+  if (price < 10) return 4;
+  return 2;
+}
+
+function roundPrice(price, referencePrice = price) {
+  return +price.toFixed(getPriceDecimals(referencePrice));
+}
+
+function isSuspiciousPrice(ticker, price) {
+  return ticker.includes("-USD") && price > 0 && price < 0.01 && !LOW_PRICE_CRYPTO_TICKERS.has(ticker);
+}
 
 // ─────────────────────────────────────
 // DATA FETCHING — Alpaca primary, Yahoo fallback
@@ -489,6 +506,12 @@ async function openPosition(db, ticker, name, price, atr, score, activeInd) {
   if (slDist <= 0 || price <= 0) return null;
 
   const isCrypto = ticker.includes("-USD");
+  if (isSuspiciousPrice(ticker, price)) return null;
+
+  const decimals = getPriceDecimals(price);
+  const minTick = 1 / (10 ** decimals);
+  if (slDist < minTick) return null;
+
   let shares;
   if (isCrypto) {
     shares = +((capital * cfg.risk_per_trade) / slDist).toFixed(6);
@@ -503,10 +526,11 @@ async function openPosition(db, ticker, name, price, atr, score, activeInd) {
   }
 
   // Simulate buy at ask (price + spread/slippage)
-  const execPrice = +(price * (1 + cfg.spread_slippage_pct)).toFixed(4);
+  const execPrice = roundPrice(price * (1 + cfg.spread_slippage_pct), price);
   const cost = +(shares * execPrice).toFixed(2);
-  const sl = +(execPrice - slDist).toFixed(2);
-  const tp = +(execPrice + slDist * 2).toFixed(2);
+  const sl = roundPrice(execPrice - slDist, execPrice);
+  const tp = roundPrice(execPrice + slDist * 2, execPrice);
+  if (sl <= 0 || sl >= execPrice || tp <= execPrice) return null;
 
   await db.prepare(
     `INSERT INTO positions (ticker,name,entry_price,shares,stop_loss,take_profit,highest,cost,opened_at,score_at_entry,current_price,brain_indicators)
@@ -523,7 +547,7 @@ async function closePosition(db, ticker, price, reason) {
 
   // Simulate sell at bid (price - spread/slippage)
   const cfg = await getSettings(db);
-  const execPrice = +(price * (1 - cfg.spread_slippage_pct)).toFixed(4);
+  const execPrice = roundPrice(price * (1 - cfg.spread_slippage_pct), price);
   const revenue = pos.shares * execPrice;
   const pnl = +(revenue - pos.cost).toFixed(2);
   const pnlPct = +((execPrice - pos.entry_price) / pos.entry_price * 100).toFixed(2);
@@ -612,6 +636,11 @@ async function scan(db, env) {
         continue;
       }
 
+      if (pos.stop_loss <= 0 || pos.take_profit <= 0) {
+        results.equity += livePrice * pos.shares;
+        continue;
+      }
+
       // Trailing stop (use daily high for highest tracking)
       const effectiveHigh = Math.max(high, livePrice);
       let highest = Math.max(pos.highest, effectiveHigh);
@@ -620,7 +649,7 @@ async function scan(db, env) {
       const gainPct = (highest - pos.entry_price) / pos.entry_price;
       if (gainPct >= cfg.trailing_activation) {
         trailingActive = 1;
-        const newSl = +(highest * (1 - cfg.trailing_distance)).toFixed(2);
+        const newSl = roundPrice(highest * (1 - cfg.trailing_distance), highest);
         if (newSl > sl) sl = newSl;
       }
       await db.prepare("UPDATE positions SET highest=?, stop_loss=?, trailing_active=? WHERE ticker=?")
@@ -655,9 +684,11 @@ async function scan(db, env) {
 
       const row = enriched[enriched.length - 1];
       const prev = enriched[enriched.length - 2];
+      if (isSuspiciousPrice(ticker, row.close)) continue;
+
       const { signal, score, rsi, atr, reasons, activeInd } = generateSignal(row, prev, spyRow, weights, ticker);
 
-      results.scores.push({ ticker, name, price: +row.close.toFixed(2), score, rsi, signal, reasons });
+      results.scores.push({ ticker, name, price: roundPrice(row.close), score, rsi, signal, reasons });
 
       // Save to scan log (keep last 100)
       await db.prepare("INSERT INTO scan_log (created_at,ticker,price,score,rsi,signal,reasons) VALUES (?,?,?,?,?,?,?)")
