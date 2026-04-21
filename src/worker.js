@@ -432,6 +432,35 @@ async function fetchBars(ticker, env, range = "3mo", interval = "1d") {
   return fetchBarsYahoo(ticker, range, interval);
 }
 
+async function fetchLiveTrendSeries(ticker, env, livePrice = null) {
+  let bars = [];
+
+  if (ticker.includes("-USD")) {
+    bars = await fetchBarsRevolutX(ticker, env, "1d", "5m");
+    if (bars.length < 8) bars = await fetchBarsYahoo(ticker, "1d", "5m");
+  } else {
+    bars = await fetchBarsYahoo(ticker, "1d", "5m");
+    if (bars.length < 8) bars = await fetchBarsYahoo(ticker, "5d", "15m");
+  }
+
+  const series = bars
+    .map((bar) => bar.close)
+    .filter((value) => Number.isFinite(value))
+    .slice(-24);
+
+  if (Number.isFinite(livePrice)) {
+    if (!series.length) {
+      series.push(livePrice);
+    } else if (Math.abs(series[series.length - 1] - livePrice) > Math.max(0.000001, Math.abs(livePrice) * 0.0001)) {
+      series.push(livePrice);
+    } else {
+      series[series.length - 1] = livePrice;
+    }
+  }
+
+  return series.slice(-24).map((value) => roundPrice(value));
+}
+
 // ─────────────────────────────────────
 // INDICATORS
 // ─────────────────────────────────────
@@ -1088,8 +1117,8 @@ async function handleAPI(request, env) {
     const closedTrades = (await db.prepare("SELECT * FROM closed_trades ORDER BY id DESC").all()).results || [];
     const recentLogs = (await db.prepare("SELECT * FROM scan_log ORDER BY id DESC LIMIT 50").all()).results || [];
 
-    // Fetch live prices for open positions
-    for (const pos of positions) {
+    // Fetch live prices and compact live trend series for open positions
+    await Promise.all(positions.map(async (pos) => {
       try {
         const livePrice = await fetchLatestPrice(pos.ticker, env);
         if (livePrice) {
@@ -1100,7 +1129,13 @@ async function handleAPI(request, env) {
             .bind(livePrice, pos.unrealized_pnl, pos.unrealized_pct, pos.ticker).run();
         }
       } catch (e) {}
-    }
+
+      try {
+        pos.live_trend = await fetchLiveTrendSeries(pos.ticker, env, pos.current_price || pos.entry_price);
+      } catch (e) {
+        pos.live_trend = [];
+      }
+    }));
 
     let equity = capital;
     positions.forEach((p) => { equity += (p.current_price || p.entry_price) * (p.shares || 0); });
@@ -1130,6 +1165,7 @@ async function handleAPI(request, env) {
         trailing_active: !!p.trailing_active,
         auto_sl: !!p.auto_sl,
         brain_indicators: JSON.parse(p.brain_indicators || "[]"),
+        live_trend: Array.isArray(p.live_trend) ? p.live_trend : [],
       })),
       closedTrades,
       brain: { weights, totalTrained, confidence: Math.min(totalTrained / 100 * 100, 100) },
@@ -1409,12 +1445,21 @@ tr:hover td{background:rgba(255,255,255,.03)}
 
 /* POSITIONS */
 .pos-wrap{margin-bottom:8px}
-.pos-card{background:rgba(255,255,255,.03);border-radius:18px;padding:15px 18px;display:flex;align-items:center;gap:14px;border:1px solid var(--border);border-left:3px solid var(--border);transition:all .15s;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+.pos-card{background:rgba(255,255,255,.03);border-radius:18px;padding:15px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;border:1px solid var(--border);border-left:3px solid var(--border);transition:all .15s;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
 .pos-card:hover{background:rgba(255,255,255,.045);transform:translateX(2px)}
 .pos-card.pos-up{border-left-color:var(--green)}
 .pos-card.pos-down{border-left-color:var(--red)}
-.pos-name{font-weight:700;flex:1;font-size:.95rem}
+.pos-main{display:flex;flex-direction:column;gap:6px;flex:1;min-width:190px}
+.pos-name{font-weight:700;font-size:.95rem}
 .pos-detail{font-size:.8rem;color:var(--text2);font-family:'IBM Plex Mono',monospace}
+.pos-trend{min-width:170px;flex:1;max-width:220px;padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06)}
+.pos-trend-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.pos-trend-label{font-size:.62rem;color:var(--text3);text-transform:uppercase;letter-spacing:.1em;font-weight:800}
+.pos-trend-value{font-size:.76rem;font-family:'IBM Plex Mono',monospace;font-weight:700}
+.pos-trend-chart{position:relative;height:48px;margin-top:8px}
+.pos-trend-chart canvas{display:block;width:100%!important;height:48px!important}
+.pos-trend-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.64rem;color:var(--text4)}
+.pos-trend-empty.hidden{display:none}
 .pos-pnl{font-weight:800;font-size:1rem;min-width:120px;text-align:right;font-family:'IBM Plex Mono',monospace}
 .pos-levels{font-size:.72rem;color:var(--text4)}
 .pos-expand{background:none;border:none;color:var(--accent2);cursor:pointer;font-size:1rem;padding:6px 10px;transition:transform .2s,background .15s;border-radius:10px}
@@ -1492,6 +1537,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
   .stats{grid-template-columns:1fr 1fr}.stat-equity .stat-value{font-size:1.5rem}
   .overview-grid{grid-template-columns:1fr}
   .detail-grid{grid-template-columns:1fr}
+  .pos-trend{max-width:none;min-width:100%}
 }
 @media(max-width:640px){
   .main{padding:18px 14px 28px}
@@ -1746,7 +1792,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
 
 <script>
 const API=window.location.origin+"/api";
-let logs=[];let lastSeenScan=0;let performanceChart=null;
+let logs=[];let lastSeenScan=0;let performanceChart=null;let positionCharts=[];
 
 function renderIcons(){
   if(window.lucide&&window.lucide.createIcons) window.lucide.createIcons();
@@ -1763,6 +1809,13 @@ function setButtonLabel(id,label,busy){
 
 function fmtSignedEuro(v){return (v>=0?"+":"")+"€"+v.toFixed(2);}
 function fmtPlainEuro(v){return "€"+v.toFixed(2);}
+function fmtTrendPrice(v){
+  const abs=Math.abs(v);
+  if(abs<0.01) return v.toFixed(8);
+  if(abs<1) return v.toFixed(6);
+  if(abs<10) return v.toFixed(4);
+  return v.toFixed(2);
+}
 
 function timeAgo(date){
   const mins=Math.max(0,Math.floor((Date.now()-date.getTime())/60000));
@@ -1855,6 +1908,70 @@ function renderPerformanceChart(scanActivity,closedTrades,totalPnl){
   });
 }
 
+function destroyPositionCharts(){
+  positionCharts.forEach(chart=>{try{chart.destroy();}catch{}});
+  positionCharts=[];
+}
+
+function renderPositionTrendCharts(positions){
+  destroyPositionCharts();
+  (positions||[]).forEach((position,index)=>{
+    const canvas=document.getElementById("posTrend"+index);
+    const empty=document.getElementById("posTrendEmpty"+index);
+    if(!canvas) return;
+
+    const series=(position.live_trend||[]).filter(value=>Number.isFinite(value));
+    if(series.length<2){
+      if(empty) empty.classList.remove("hidden");
+      return;
+    }
+
+    if(empty) empty.classList.add("hidden");
+    const ctx=canvas.getContext("2d");
+    if(!ctx) return;
+
+    const up=(position.current_price||position.entry_price)>=series[0];
+    const gradient=ctx.createLinearGradient(0,0,0,56);
+    if(up){
+      gradient.addColorStop(0,"rgba(53,213,166,.28)");
+      gradient.addColorStop(1,"rgba(53,213,166,0)");
+    }else{
+      gradient.addColorStop(0,"rgba(255,93,109,.24)");
+      gradient.addColorStop(1,"rgba(255,93,109,0)");
+    }
+
+    positionCharts.push(new Chart(ctx,{
+      type:"line",
+      data:{
+        labels:series.map((_,i)=>i+1),
+        datasets:[{
+          data:series,
+          borderColor:up?"#35d5a6":"#ff5d6d",
+          backgroundColor:gradient,
+          fill:true,
+          tension:.35,
+          pointRadius:0,
+          pointHoverRadius:3,
+          borderWidth:2
+        }]
+      },
+      options:{
+        responsive:true,
+        maintainAspectRatio:false,
+        animation:false,
+        plugins:{
+          legend:{display:false},
+          tooltip:{
+            displayColors:false,
+            callbacks:{label:(ctx)=>"$"+fmtTrendPrice(Number(ctx.parsed.y||0))}
+          }
+        },
+        scales:{x:{display:false},y:{display:false}}
+      }
+    }));
+  });
+}
+
 function renderOverview(d,scores){
   const positions=d.positions||[];
   const closedTrades=d.closedTrades||[];
@@ -1936,16 +2053,21 @@ async function load(){
         const curVal=(cur*p.shares);
         const opened=p.opened_at?new Date(p.opened_at).toLocaleString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
         const indicators=(p.brain_indicators||[]).join(", ")||"—";
+        const trendSeries=(p.live_trend||[]).filter(value=>typeof value==="number"&&isFinite(value));
+        const trendBase=trendSeries.length?trendSeries[0]:p.entry_price;
+        const trendPct=trendBase?((cur-trendBase)/trendBase*100):0;
+        const trendReady=trendSeries.length>=2;
         return '<div class="pos-wrap"><div class="pos-card '+(up?"pos-up":"pos-down")+'">'
           +'<button class="pos-expand" onclick="togglePos('+i+')" id="posExp'+i+'">▼</button>'
-          +'<div class="pos-name">'+p.name+trail+'</div>'
-          +'<div class="pos-detail mono">'+sh+'sh &middot; $'+p.entry_price.toFixed(2)+' &rarr; $'+cur.toFixed(2)+'</div>'
+          +'<div class="pos-main"><div class="pos-name">'+p.name+trail+'</div><div class="pos-detail mono">'+sh+'sh &middot; $'+fmtTrendPrice(p.entry_price)+' &rarr; $'+fmtTrendPrice(cur)+'</div></div>'
+          +'<div class="pos-trend"><div class="pos-trend-head"><span class="pos-trend-label">Trend live</span><span class="pos-trend-value '+(trendReady?(trendPct>=0?"g":"r"):'')+'">'+(trendReady?((trendPct>=0?"+":"")+trendPct.toFixed(2)+"%"):'No feed')+'</span></div><div class="pos-trend-chart"><canvas id="posTrend'+i+'"></canvas><div class="pos-trend-empty'+(trendReady?' hidden':'')+'" id="posTrendEmpty'+i+'">Trend live in attesa</div></div></div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
           +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
           +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')">Chiudi</button></div>'
           +'<div class="pos-extra" id="posExtra'+i+'">'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Costo apertura</span><span class="pos-extra-val">€'+p.cost.toFixed(2)+'</span></div>'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Valore attuale</span><span class="pos-extra-val '+(up?"g":"r")+'">€'+curVal.toFixed(2)+'</span></div>'
+          +'<div class="pos-extra-row"><span class="pos-extra-label">Trend intraday</span><span class="pos-extra-val '+(trendReady?(trendPct>=0?"g":"r"):'')+'">'+(trendReady?((trendPct>=0?"+":"")+trendPct.toFixed(2)+"% su 24 punti"):'Feed trend non disponibile')+'</span></div>'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Aperta il</span><span class="pos-extra-val">'+opened+'</span></div>'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Score ingresso</span><span class="pos-extra-val">'+(p.score_at_entry||0).toFixed(1)+'</span></div>'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Trailing Stop</span><span class="pos-extra-val">'+(p.trailing_active?"<span class=g>Attivo</span>":"No")+'</span></div>'
@@ -1953,6 +2075,7 @@ async function load(){
           +'</div></div>';
       }).join("");
     }
+    renderPositionTrendCharts(d.positions);
 
     // Watchlist
     const seen=new Set();const scores=[];
