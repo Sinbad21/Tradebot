@@ -1357,6 +1357,21 @@ svg{stroke:currentColor}
 .sidebar{width:auto;background:var(--glass),rgba(15,19,25,.88);padding:18px;border:1px solid var(--border);border-radius:26px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;position:sticky;top:94px;box-shadow:var(--shadow-lg);backdrop-filter:blur(16px);overflow:hidden}
 .sidebar::before{content:"";position:absolute;inset:0 0 auto;height:120px;background:linear-gradient(180deg,rgba(255,255,255,.08),transparent);opacity:.3;pointer-events:none}
 
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:20px;padding:20px 22px;border:1px solid var(--border);border-radius:26px;background:var(--glass),rgba(15,19,25,.88);box-shadow:var(--shadow-soft)}
+.page-copy{max-width:760px}
+.page-kicker{font-size:.68rem;color:var(--text3);text-transform:uppercase;letter-spacing:.16em;font-weight:800}
+.page-title{font-size:clamp(1.4rem,2vw,2rem);font-weight:800;letter-spacing:-.04em;margin-top:8px}
+.page-desc{margin-top:10px;color:var(--text2);line-height:1.7;font-size:.9rem}
+.page-context{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:10px 14px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text2);font-size:.76rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+
+.dash-page{display:none;animation:pageFade .22s ease}
+.dash-page.active{display:block}
+@keyframes pageFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+.nav-stack{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.nav-btn{background:rgba(255,255,255,.03);color:var(--text2);border-color:var(--border)}
+.nav-btn:hover{border-color:var(--border2);color:var(--text)}
+
 /* HERO */
 .hero-strip{display:grid;grid-template-columns:1.3fr .9fr;gap:18px;background:linear-gradient(135deg,rgba(255,255,255,.06),rgba(136,184,255,.06) 42%,rgba(73,226,199,.04));border:1px solid var(--border);border-radius:30px;padding:28px;margin-bottom:22px;position:relative;overflow:hidden;box-shadow:var(--shadow-lg)}
 .hero-strip::before{content:"";position:absolute;width:280px;height:280px;right:-70px;top:-90px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.22),rgba(136,184,255,.05) 40%,transparent 72%);filter:blur(10px)}
@@ -1481,12 +1496,19 @@ tr:hover td{background:rgba(255,255,255,.03)}
 .side-card-kicker{font-size:.66rem;color:var(--text3);text-transform:uppercase;letter-spacing:.14em;font-weight:800}
 .side-card-title{font-size:1rem;font-weight:800;letter-spacing:-.02em;margin-top:8px}
 .side-card-note{font-size:.82rem;color:var(--text3);line-height:1.6;margin-top:8px}
+.nav-shell{background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:20px;padding:12px;display:flex;flex-direction:column;gap:8px}
 .side-btn{width:100%;padding:11px 14px;border:1px solid transparent;border-radius:16px;cursor:pointer;font-size:.85rem;font-weight:700;text-align:left;transition:all .15s;display:flex;align-items:center;gap:10px;position:relative;z-index:1}
 .side-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
 .side-btn svg,.brain-label svg,.bear-icon svg,.modal-title svg{width:16px;height:16px;stroke-width:2;flex-shrink:0}
 .side-btn svg{padding:7px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid var(--border);width:32px;height:32px}
 .side-btn .btn-label{flex:1}
 .side-btn.is-busy{cursor:wait;opacity:.85}
+.nav-btn{background:rgba(255,255,255,.025);color:var(--text2);border-color:rgba(255,255,255,.04)}
+.nav-btn:hover{border-color:var(--border2);color:var(--text)}
+.nav-btn.active{background:linear-gradient(135deg,rgba(244,247,255,.12),rgba(125,231,255,.08));border-color:rgba(207,223,255,.22);color:var(--text);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.nav-btn.active svg{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.14)}
+.nav-hint{font-family:'IBM Plex Mono',monospace;font-size:.68rem;color:var(--text4)}
+.nav-btn.active .nav-hint{color:var(--accent2)}
 .btn-start{background:linear-gradient(135deg,var(--accent) 0%,var(--accent2) 100%);color:#081018;font-size:.95rem;padding:13px 14px;text-align:center;justify-content:center;border-radius:18px;box-shadow:0 18px 42px rgba(207,223,255,.22)}
 .btn-start:hover{box-shadow:0 24px 54px rgba(207,223,255,.28)}
 .btn-action{background:rgba(255,255,255,.035);color:var(--text2);border-color:var(--border)}
@@ -1528,7 +1550,8 @@ tr:hover td{background:rgba(255,255,255,.03)}
 
 @media(max-width:1180px){
   .main{grid-template-columns:1fr}
-  .sidebar{position:relative;top:auto}
+  .sidebar{position:relative;top:auto;order:-1}
+  .page-head{flex-direction:column}
 }
 @media(max-width:820px){
   .topbar-inner{flex-direction:column;align-items:flex-start}
@@ -1538,6 +1561,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
   .overview-grid{grid-template-columns:1fr}
   .detail-grid{grid-template-columns:1fr}
   .pos-trend{max-width:none;min-width:100%}
+  .nav-stack{display:grid;grid-template-columns:1fr 1fr}
 }
 @media(max-width:640px){
   .main{padding:18px 14px 28px}
@@ -1545,6 +1569,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
   .stats{grid-template-columns:1fr}
   .section-hdr{font-size:.68rem}
   .sidebar{padding:14px}
+  .nav-stack{grid-template-columns:1fr}
 }
 /* BEARISH BANNER */
 .bear-banner{display:none;align-items:center;gap:12px;padding:14px 18px;background:rgba(255,93,109,.1);border:1px solid rgba(255,93,109,.24);border-radius:20px;margin-bottom:18px;animation:bannerPulse 3s infinite;box-shadow:var(--shadow-soft)}
@@ -1585,128 +1610,155 @@ tr:hover td{background:rgba(255,255,255,.03)}
 <div class="main">
 <div class="content">
 
-  <div class="hero-strip">
-    <div class="hero-copy">
-      <div class="hero-kicker">Premium Interface</div>
-      <h2>Controllo operativo con una resa più pulita, lucida e finanziaria.</h2>
-      <p>Dashboard ridisegnata in stile fintech premium: nero profondo, superfici glass, gerarchia visiva più netta e focus immediato su capitale, rischio e segnali.</p>
+  <div class="page-head">
+    <div class="page-copy">
+      <div class="page-kicker" id="pageKicker">Workspace</div>
+      <div class="page-title" id="pageTitle">Panoramica operativa</div>
+      <div class="page-desc" id="pageDesc">Capitale, regime di mercato, performance e stato generale del motore raccolti in una vista introduttiva.</div>
     </div>
-    <div class="hero-side">
-      <span class="hero-chip">US + EU + Crypto</span>
-      <span class="hero-chip">Auto scan ogni 5 min</span>
-      <span class="hero-chip">Brain learning attivo</span>
-      <div class="hero-note">Motore invariato, linguaggio visivo più vicino a un command center finanziario premium.</div>
-    </div>
+    <div class="page-context" id="pageContext">Overview live</div>
   </div>
 
-  <!-- STAT CARDS -->
-  <div class="bear-banner" id="bearBanner">
-    <span class="bear-icon"><i data-lucide="shield-alert"></i></span>
-    <div class="bear-text">
-      <div class="bear-title">Mercato sfavorevole — Bot in osservazione</div>
-      <div class="bear-sub">SPY sotto EMA50: il mercato è ribassista. Il bot monitora ma non apre nuove posizioni (solo gestione trailing stop su posizioni aperte).</div>
+  <section class="dash-page active" data-page="overview">
+    <div class="hero-strip">
+      <div class="hero-copy">
+        <div class="hero-kicker">Premium Interface</div>
+        <h2>Controllo operativo con una resa più pulita, lucida e finanziaria.</h2>
+        <p>Dashboard ridisegnata in stile fintech premium: nero profondo, superfici glass, gerarchia visiva più netta e focus immediato su capitale, rischio e segnali.</p>
+      </div>
+      <div class="hero-side">
+        <span class="hero-chip">US + EU + Crypto</span>
+        <span class="hero-chip">Auto scan ogni 5 min</span>
+        <span class="hero-chip">Brain learning attivo</span>
+        <div class="hero-note">Motore invariato, linguaggio visivo più vicino a un command center finanziario premium.</div>
+      </div>
     </div>
-    <button class="bear-dismiss" onclick="this.parentElement.classList.remove('show')">Nascondi</button>
-  </div>
-  <div class="stats">
-    <div class="stat stat-equity">
-      <div class="stat-label">Equity <span class="info-i" data-tip="Valore totale: cash + posizioni aperte">ⓘ</span></div>
-      <div class="stat-value" id="vEquity">€5,000.00</div>
-      <div class="stat-sub" id="vCash">Cash: €5,000.00</div>
-    </div>
-    <div class="stat stat-pnl">
-      <div class="stat-label">P&L <span class="info-i" data-tip="Profitto/Perdita totale\\nEquity - Capitale iniziale (€5.000)">ⓘ</span></div>
-      <div class="stat-value" id="vPnl">€0.00</div>
-    </div>
-    <div class="stat stat-spy">
-      <div class="stat-label">SPY <span class="info-i" data-tip="S&P 500 — salute del mercato USA\\nSopra EMA50 = BULL (BUY permessi)\\nSotto EMA50 = BEAR (solo Mean Reversion)">ⓘ</span></div>
-      <div class="stat-value" id="vSpy">—</div>
-      <div class="stat-sub" id="vSpyStatus"></div>
-    </div>
-    <div class="stat stat-pos">
-      <div class="stat-label">Posizioni <span class="info-i" data-tip="Posizioni aperte / massimo configurato">ⓘ</span></div>
-      <div class="stat-value" id="vPos">0/10</div>
-    </div>
-  </div>
 
-  <div class="overview-grid">
-    <div class="panel">
-      <div class="panel-head">
-        <div>
-          <div class="panel-kicker">Performance</div>
-          <h3>Andamento operativo</h3>
+    <div class="bear-banner" id="bearBanner">
+      <span class="bear-icon"><i data-lucide="shield-alert"></i></span>
+      <div class="bear-text">
+        <div class="bear-title">Mercato sfavorevole — Bot in osservazione</div>
+        <div class="bear-sub">SPY sotto EMA50: il mercato è ribassista. Il bot monitora ma non apre nuove posizioni (solo gestione trailing stop su posizioni aperte).</div>
+      </div>
+      <button class="bear-dismiss" onclick="this.parentElement.classList.remove('show')">Nascondi</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat stat-equity">
+        <div class="stat-label">Equity <span class="info-i" data-tip="Valore totale: cash + posizioni aperte">ⓘ</span></div>
+        <div class="stat-value" id="vEquity">€5,000.00</div>
+        <div class="stat-sub" id="vCash">Cash: €5,000.00</div>
+      </div>
+      <div class="stat stat-pnl">
+        <div class="stat-label">P&L <span class="info-i" data-tip="Profitto/Perdita totale\\nEquity - Capitale iniziale (€5.000)">ⓘ</span></div>
+        <div class="stat-value" id="vPnl">€0.00</div>
+      </div>
+      <div class="stat stat-spy">
+        <div class="stat-label">SPY <span class="info-i" data-tip="S&P 500 — salute del mercato USA\\nSopra EMA50 = BULL (BUY permessi)\\nSotto EMA50 = BEAR (solo Mean Reversion)">ⓘ</span></div>
+        <div class="stat-value" id="vSpy">—</div>
+        <div class="stat-sub" id="vSpyStatus"></div>
+      </div>
+      <div class="stat stat-pos">
+        <div class="stat-label">Posizioni <span class="info-i" data-tip="Posizioni aperte / massimo configurato">ⓘ</span></div>
+        <div class="stat-value" id="vPos">0/10</div>
+      </div>
+    </div>
+
+    <div class="overview-grid">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-kicker">Performance</div>
+            <h3>Andamento operativo</h3>
+          </div>
+          <div class="panel-meta" id="perfMeta">In attesa dati</div>
         </div>
-        <div class="panel-meta" id="perfMeta">In attesa dati</div>
+        <div class="chart-shell"><canvas id="equityChart"></canvas></div>
       </div>
-      <div class="chart-shell"><canvas id="equityChart"></canvas></div>
-    </div>
-    <div class="panel">
-      <div class="panel-head">
-        <div>
-          <div class="panel-kicker">System</div>
-          <h3>Stato del motore</h3>
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-kicker">System</div>
+            <h3>Stato del motore</h3>
+          </div>
+          <div class="panel-meta" id="overviewStatus">Monitoraggio attivo</div>
         </div>
-        <div class="panel-meta" id="overviewStatus">Monitoraggio attivo</div>
-      </div>
-      <div class="detail-grid">
-        <div class="detail-card"><span>Ultima scan</span><strong id="dLastScan">—</strong><small id="dScanAge">In attesa di attività</small></div>
-        <div class="detail-card"><span>Esposizione</span><strong id="dExposure">—</strong><small id="dOpenCount">Nessuna posizione aperta</small></div>
-        <div class="detail-card"><span>P&amp;L realizzato</span><strong id="dRealized">—</strong><small id="dBestTrade">Nessun trade chiuso</small></div>
-        <div class="detail-card"><span>P&amp;L aperto</span><strong id="dUnrealized">—</strong><small id="dWorstTrade">Nessun drawdown rilevato</small></div>
-        <div class="detail-card"><span>Segnali</span><strong id="dSignalMix">—</strong><small id="dAvgScore">Nessun segnale attivo</small></div>
-        <div class="detail-card"><span>Brain</span><strong id="dBrainHealth">—</strong><small id="dDataFeed">Feed non inizializzato</small></div>
+        <div class="detail-grid">
+          <div class="detail-card"><span>Ultima scan</span><strong id="dLastScan">—</strong><small id="dScanAge">In attesa di attività</small></div>
+          <div class="detail-card"><span>Esposizione</span><strong id="dExposure">—</strong><small id="dOpenCount">Nessuna posizione aperta</small></div>
+          <div class="detail-card"><span>P&amp;L realizzato</span><strong id="dRealized">—</strong><small id="dBestTrade">Nessun trade chiuso</small></div>
+          <div class="detail-card"><span>P&amp;L aperto</span><strong id="dUnrealized">—</strong><small id="dWorstTrade">Nessun drawdown rilevato</small></div>
+          <div class="detail-card"><span>Segnali</span><strong id="dSignalMix">—</strong><small id="dAvgScore">Nessun segnale attivo</small></div>
+          <div class="detail-card"><span>Brain</span><strong id="dBrainHealth">—</strong><small id="dDataFeed">Feed non inizializzato</small></div>
+        </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- POSITIONS -->
-  <div class="section-hdr">Posizioni Aperte <span class="info-i" data-tip="Posizioni annotate dal bot\\nSL = Stop Loss\\nTP = Take Profit\\nTrailing = stop dinamico attivo">ⓘ</span></div>
-  <div class="positions-shell"><div id="posContainer"><div class="empty-state">Nessuna posizione aperta</div></div></div>
+  <section class="dash-page" data-page="positions">
+    <div class="section-hdr">Posizioni Aperte <span class="info-i" data-tip="Posizioni annotate dal bot\\nSL = Stop Loss\\nTP = Take Profit\\nTrailing = stop dinamico attivo">ⓘ</span></div>
+    <div class="positions-shell"><div id="posContainer"><div class="empty-state">Nessuna posizione aperta</div></div></div>
+  </section>
 
-  <!-- WATCHLIST -->
-  <div class="section-hdr">Watchlist <span class="info-i" data-tip="Azioni USA + EU + Crypto monitorati\\nOgni 5 min: scarica dati, calcola MACD,\\nRSI, EMA, Bollinger e decide se comprare">ⓘ</span>
-    <span style="margin-left:auto;font-size:.7rem;color:var(--text3)" id="scanTime"></span>
-  </div>
-  <div class="table-shell"><table id="watchlist">
-    <thead><tr>
-      <th>Asset <span class="info-i" data-tip="Nome dell'azione o crypto">ⓘ</span></th>
-      <th style="text-align:right">Prezzo <span class="info-i" data-tip="Ultimo prezzo in USD">ⓘ</span></th>
-      <th style="text-align:right">Score <span class="info-i" data-tip="Punteggio da -3 a +3\\nSopra +0.8 = BUY\\nSotto -0.8 = SELL">ⓘ</span></th>
-      <th style="text-align:right">RSI <span class="info-i" data-tip="0-100. Sotto 30 = ipervenduto\\nSopra 70 = ipercomprato">ⓘ</span></th>
-      <th style="text-align:center">Segnale <span class="info-i" data-tip="BUY = compra\\nWATCH = segnale promettente ma filtrato\\nHOLD = nessuna azione\\nSELL = pressione ribassista">ⓘ</span></th>
-    </tr></thead>
-    <tbody id="wlBody"><tr><td colspan="5" style="color:var(--text3);text-align:center">Premi Scan per analizzare</td></tr></tbody>
-  </table></div>
+  <section class="dash-page" data-page="market">
+    <div class="section-hdr">Watchlist <span class="info-i" data-tip="Azioni USA + EU + Crypto monitorati\\nOgni 5 min: scarica dati, calcola MACD,\\nRSI, EMA, Bollinger e decide se comprare">ⓘ</span>
+      <span style="margin-left:auto;font-size:.7rem;color:var(--text3)" id="scanTime"></span>
+    </div>
+    <div class="table-shell"><table id="watchlist">
+      <thead><tr>
+        <th>Asset <span class="info-i" data-tip="Nome dell'azione o crypto">ⓘ</span></th>
+        <th style="text-align:right">Prezzo <span class="info-i" data-tip="Ultimo prezzo in USD">ⓘ</span></th>
+        <th style="text-align:right">Score <span class="info-i" data-tip="Punteggio da -3 a +3\\nSopra +0.8 = BUY\\nSotto -0.8 = SELL">ⓘ</span></th>
+        <th style="text-align:right">RSI <span class="info-i" data-tip="0-100. Sotto 30 = ipervenduto\\nSopra 70 = ipercomprato">ⓘ</span></th>
+        <th style="text-align:center">Segnale <span class="info-i" data-tip="BUY = compra\\nWATCH = segnale promettente ma filtrato\\nHOLD = nessuna azione\\nSELL = pressione ribassista">ⓘ</span></th>
+      </tr></thead>
+      <tbody id="wlBody"><tr><td colspan="5" style="color:var(--text3);text-align:center">Premi Scan per analizzare</td></tr></tbody>
+    </table></div>
+  </section>
 
-  <!-- STORICO OPERAZIONI -->
-  <div class="section-hdr">Storico Operazioni <span class="info-i" data-tip="Tutte le operazioni di apertura e chiusura">ⓘ</span></div>
-  <div class="table-shell"><table id="tradesTable">
-    <thead><tr>
-      <th>Data</th>
-      <th>Asset</th>
-      <th style="text-align:right">Entry</th>
-      <th style="text-align:right">Exit</th>
-      <th style="text-align:right">Shares</th>
-      <th style="text-align:right">P&L</th>
-      <th style="text-align:right">%</th>
-      <th>Motivo</th>
-    </tr></thead>
-    <tbody id="tradesBody"><tr><td colspan="8" style="color:var(--text3);text-align:center">Nessuna operazione</td></tr></tbody>
-  </table></div>
+  <section class="dash-page" data-page="history">
+    <div class="section-hdr">Storico Operazioni <span class="info-i" data-tip="Tutte le operazioni di apertura e chiusura">ⓘ</span></div>
+    <div class="table-shell"><table id="tradesTable">
+      <thead><tr>
+        <th>Data</th>
+        <th>Asset</th>
+        <th style="text-align:right">Entry</th>
+        <th style="text-align:right">Exit</th>
+        <th style="text-align:right">Shares</th>
+        <th style="text-align:right">P&L</th>
+        <th style="text-align:right">%</th>
+        <th>Motivo</th>
+      </tr></thead>
+      <tbody id="tradesBody"><tr><td colspan="8" style="color:var(--text3);text-align:center">Nessuna operazione</td></tr></tbody>
+    </table></div>
+  </section>
 
-  <!-- LOG -->
-  <div class="section-hdr">Log <span class="info-i" data-tip="Registro attività\\nVerde = acquisto, Rosso = vendita\\nGiallo = avviso">ⓘ</span></div>
-  <div class="log-shell"><div class="log-box" id="logBox"></div></div>
+  <section class="dash-page" data-page="activity">
+    <div class="section-hdr">Log Attività <span class="info-i" data-tip="Registro attività\\nVerde = acquisto, Rosso = vendita\\nGiallo = avviso">ⓘ</span></div>
+    <div class="log-shell"><div class="log-box" id="logBox"></div></div>
+  </section>
 
 </div>
 
 <!-- SIDEBAR -->
 <div class="sidebar">
   <div class="side-card">
-    <div class="side-card-kicker">Command Rail</div>
-    <div class="side-card-title">Controlli rapidi</div>
-    <div class="side-card-note">Azioni essenziali del bot raccolte in un unico modulo operativo, con priorità visiva su scan, rischio e manutenzione.</div>
+    <div class="side-card-kicker">Workspace</div>
+    <div class="side-card-title">Viste dedicate</div>
+    <div class="side-card-note">La dashboard è ora divisa in pagine operative: overview, posizioni, mercato, storico e attività.</div>
   </div>
+
+  <div class="nav-shell">
+    <div class="side-label">Navigazione</div>
+    <div class="nav-stack">
+      <button class="side-btn nav-btn active" data-page="overview" onclick="goToPage('overview')"><i data-lucide="layout-dashboard"></i><span class="btn-label">Overview</span><span class="nav-hint">01</span></button>
+      <button class="side-btn nav-btn" data-page="positions" onclick="goToPage('positions')"><i data-lucide="briefcase"></i><span class="btn-label">Posizioni</span><span class="nav-hint">02</span></button>
+      <button class="side-btn nav-btn" data-page="market" onclick="goToPage('market')"><i data-lucide="search"></i><span class="btn-label">Mercato</span><span class="nav-hint">03</span></button>
+      <button class="side-btn nav-btn" data-page="history" onclick="goToPage('history')"><i data-lucide="history"></i><span class="btn-label">Storico</span><span class="nav-hint">04</span></button>
+      <button class="side-btn nav-btn" data-page="activity" onclick="goToPage('activity')"><i data-lucide="activity"></i><span class="btn-label">Attività</span><span class="nav-hint">05</span></button>
+    </div>
+  </div>
+
   <button class="side-btn btn-start" onclick="doScan()" id="scanBtn"><i data-lucide="search"></i><span class="btn-label">Esegui scan</span></button>
   <hr class="sep">
   <button class="side-btn btn-action" onclick="closeAllModal()"><i data-lucide="folder-output"></i><span class="btn-label">Chiudi tutte</span></button>
@@ -1792,11 +1844,81 @@ tr:hover td{background:rgba(255,255,255,.03)}
 
 <script>
 const API=window.location.origin+"/api";
-let logs=[];let lastSeenScan=0;let performanceChart=null;let positionCharts=[];
+const PAGE_META={
+  overview:{kicker:"Workspace",title:"Panoramica operativa",desc:"Capitale, regime di mercato, performance e stato generale del motore raccolti in una vista introduttiva."},
+  positions:{kicker:"Portfolio",title:"Posizioni aperte",desc:"Vista dedicata alle posizioni in corso con P&L, livelli operativi e trend live compatti."},
+  market:{kicker:"Market",title:"Watchlist e segnali",desc:"Feed di mercato, score, RSI e segnali del bot concentrati in una pagina separata per la lettura operativa."},
+  history:{kicker:"Archive",title:"Storico operazioni",desc:"Timeline dei trade chiusi con dettagli su entry, exit, risultato percentuale e motivo di uscita."},
+  activity:{kicker:"Console",title:"Attivita recente",desc:"Registro cronologico degli eventi del bot, utile per seguire scansioni, aperture e chiusure in tempo reale."}
+};
+let logs=[];let lastSeenScan=0;let performanceChart=null;let positionCharts=[];let activePage="overview";let lastStatusData=null;let lastScores=[];
 
 function renderIcons(){
   if(window.lucide&&window.lucide.createIcons) window.lucide.createIcons();
 }
+
+function normalizePage(page){
+  return PAGE_META[page]?page:"overview";
+}
+
+function getPageFromHash(){
+  return normalizePage((window.location.hash||"").replace(/^#/,""));
+}
+
+function getPageContext(page){
+  switch(page){
+    case "positions":
+      return ((lastStatusData?.positions||[]).length)+" posizioni aperte";
+    case "market":
+      return (lastScores||[]).length+" asset monitorati";
+    case "history":
+      return ((lastStatusData?.closedTrades||[]).length)+" trade chiusi";
+    case "activity":
+      return logs.length+" eventi recenti";
+    case "overview":
+    default:
+      return lastStatusData?"Equity "+fmtPlainEuro(lastStatusData.equity||0):"Overview live";
+  }
+}
+
+function updatePageHeader(){
+  const meta=PAGE_META[activePage]||PAGE_META.overview;
+  document.getElementById("pageKicker").textContent=meta.kicker;
+  document.getElementById("pageTitle").textContent=meta.title;
+  document.getElementById("pageDesc").textContent=meta.desc;
+  document.getElementById("pageContext").textContent=getPageContext(activePage);
+}
+
+function rerenderActivePage(){
+  if(!lastStatusData) return;
+  if(activePage==="overview") renderOverview(lastStatusData,lastScores);
+  if(activePage==="positions") renderPositionTrendCharts(lastStatusData.positions||[]);
+}
+
+function setActivePage(page,updateHash=true){
+  activePage=normalizePage(page);
+  document.querySelectorAll(".dash-page").forEach((section)=>{
+    section.classList.toggle("active",section.dataset.page===activePage);
+  });
+  document.querySelectorAll(".nav-btn[data-page]").forEach((button)=>{
+    button.classList.toggle("active",button.dataset.page===activePage);
+  });
+  updatePageHeader();
+  if(updateHash){
+    const nextHash="#"+activePage;
+    if(window.location.hash!==nextHash) history.replaceState(null,"",nextHash);
+  }
+  requestAnimationFrame(()=>{rerenderActivePage();renderIcons();});
+}
+
+function goToPage(page){
+  setActivePage(page,true);
+}
+
+window.addEventListener("hashchange",()=>{
+  const nextPage=getPageFromHash();
+  if(nextPage!==activePage) setActivePage(nextPage,false);
+});
 
 function setButtonLabel(id,label,busy){
   const btn=document.getElementById(id);
@@ -2075,12 +2197,15 @@ async function load(){
           +'</div></div>';
       }).join("");
     }
-    renderPositionTrendCharts(d.positions);
+    if(activePage==="positions") renderPositionTrendCharts(d.positions);
+    else destroyPositionCharts();
 
     // Watchlist
     const seen=new Set();const scores=[];
     (d.recentScores||[]).forEach(s=>{if(!seen.has(s.ticker)&&s.ticker!=="SPY"){seen.add(s.ticker);scores.push(s);}});
     scores.sort((a,b)=>b.score-a.score);
+    lastStatusData=d;
+    lastScores=scores;
 
     // SPY from scores
     const spyScore=(d.recentScores||[]).find(s=>s.ticker==="SPY");
@@ -2116,7 +2241,7 @@ async function load(){
     document.getElementById("sPnl").textContent="P&L: "+(closedPnl>=0?"+":"")+"€"+closedPnl.toFixed(2);
     document.getElementById("sPnl").style.color=closedPnl>=0?"var(--green)":"var(--red)";
 
-    renderOverview(d,scores);
+    if(activePage==="overview") renderOverview(d,scores);
 
     // Trades history
     const tb=document.getElementById("tradesBody");
@@ -2195,6 +2320,8 @@ async function load(){
       pill.className="pill "+(isOpen?"pill-open":"pill-closed");
     }
 
+    updatePageHeader();
+
     bar.style.width="100%";setTimeout(()=>{bar.style.width="0"},400);
   }catch(e){
     document.getElementById("refreshBar").style.width="0";
@@ -2208,6 +2335,7 @@ function addLog(msg,type){
   const box=document.getElementById("logBox");
   box.innerHTML=logs.map(l=>'<div class="log-'+(l.type||"")+'">'+l.t+" "+l.msg+"</div>").join("");
   box.scrollTop=box.scrollHeight;
+  updatePageHeader();
 }
 
 function togglePos(i){
@@ -2438,6 +2566,7 @@ async function resetSettings(){
 }
 
 // Init
+setActivePage(getPageFromHash(),false);
 load();
 setInterval(load,30000);
 renderIcons();
