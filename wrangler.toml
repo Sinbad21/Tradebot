@@ -15,3 +15,7 @@ database_id = "01c362d9-5c02-458c-9240-200c105d025b"
 # Alpaca API Keys (aggiungi con: npx wrangler secret put ALPACA_KEY)
 # ALPACA_KEY = "tua api key"       → wrangler secret put ALPACA_KEY
 # ALPACA_SECRET = "tua secret key" → wrangler secret put ALPACA_SECRET
+
+# Revolut X API Keys per crypto (opzionali)
+# REVOLUT_X_API_KEY = "tua api key"         → wrangler secret put REVOLUT_X_API_KEY
+# REVOLUT_X_PRIVATE_KEY = "contenuto PEM"   → wrangler secret put REVOLUT_X_PRIVATE_KEY

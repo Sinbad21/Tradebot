@@ -105,8 +105,207 @@ function isSuspiciousPrice(ticker, price) {
   return ticker.includes("-USD") && price > 0 && price < 0.01 && !LOW_PRICE_CRYPTO_TICKERS.has(ticker);
 }
 
+const REVOLUT_X_BASE_URL = "https://revx.revolut.com";
+let revolutXPrivateKeyPemCache = null;
+let revolutXPrivateKeyPromise = null;
+
+function hasRevolutXCredentials(env) {
+  return !!(env.REVOLUT_X_API_KEY && env.REVOLUT_X_PRIVATE_KEY);
+}
+
+function getRevolutXPrivateKeyPem(env) {
+  return typeof env.REVOLUT_X_PRIVATE_KEY === "string"
+    ? env.REVOLUT_X_PRIVATE_KEY.replace(/\\n/g, "\n").trim()
+    : "";
+}
+
+function toRevolutXSymbol(ticker) {
+  if (!ticker.includes("-USD")) return null;
+  const [base, quote] = ticker.split("-");
+  if (!base || !quote) return null;
+  return `${base}/${quote}`;
+}
+
+function getRevolutXIntervalMinutes(interval = "1d") {
+  switch (interval) {
+    case "1m": return 1;
+    case "5m": return 5;
+    case "15m": return 15;
+    case "30m": return 30;
+    case "60m":
+    case "1h": return 60;
+    case "4h": return 240;
+    case "1d": return 1440;
+    case "2d": return 2880;
+    case "4d": return 5760;
+    case "1wk":
+    case "1w": return 10080;
+    case "2wk": return 20160;
+    case "1mo": return 40320;
+    default: return null;
+  }
+}
+
+function getRangeLookbackMs(range = "3mo", intervalMinutes = 1440) {
+  const day = 24 * 60 * 60 * 1000;
+  switch (range) {
+    case "1d": return day;
+    case "5d": return 5 * day;
+    case "1mo": return 30 * day;
+    case "3mo": return 90 * day;
+    case "6mo": return 180 * day;
+    case "1y": return 365 * day;
+    case "2y": return 730 * day;
+    case "5y": return 1825 * day;
+    case "ytd": {
+      const startOfYear = Date.UTC(new Date().getUTCFullYear(), 0, 1);
+      return Date.now() - startOfYear;
+    }
+    default:
+      return Math.min(120, 5000) * intervalMinutes * 60 * 1000;
+  }
+}
+
+function pemToArrayBuffer(pem) {
+  const base64 = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s+/g, "");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function getRevolutXPrivateKey(env) {
+  const pem = getRevolutXPrivateKeyPem(env);
+  if (!pem) return null;
+
+  if (revolutXPrivateKeyPemCache !== pem) {
+    revolutXPrivateKeyPemCache = pem;
+    revolutXPrivateKeyPromise = crypto.subtle.importKey(
+      "pkcs8",
+      pemToArrayBuffer(pem),
+      { name: "Ed25519" },
+      false,
+      ["sign"]
+    ).catch(() => null);
+  }
+
+  return revolutXPrivateKeyPromise;
+}
+
+async function buildRevolutXHeaders(env, method, path, queryString = "", body = "") {
+  if (!hasRevolutXCredentials(env)) return null;
+
+  const key = await getRevolutXPrivateKey(env);
+  if (!key) return null;
+
+  const timestamp = Date.now().toString();
+  const message = `${timestamp}${method.toUpperCase()}${path}${queryString}${body}`;
+  const signature = await crypto.subtle.sign(
+    { name: "Ed25519" },
+    key,
+    new TextEncoder().encode(message)
+  ).catch(() => null);
+  if (!signature) return null;
+
+  return {
+    Accept: "application/json",
+    "X-Revx-API-Key": env.REVOLUT_X_API_KEY,
+    "X-Revx-Timestamp": timestamp,
+    "X-Revx-Signature": arrayBufferToBase64(signature),
+  };
+}
+
+async function fetchRevolutX(path, env, query = null) {
+  if (!hasRevolutXCredentials(env)) return null;
+
+  const queryString = query
+    ? new URLSearchParams(
+      Object.entries(query)
+        .filter(([, value]) => value !== undefined && value !== null && value !== "")
+        .map(([key, value]) => [key, String(value)])
+    ).toString()
+    : "";
+
+  const headers = await buildRevolutXHeaders(env, "GET", path, queryString, "");
+  if (!headers) return null;
+
+  const url = `${REVOLUT_X_BASE_URL}${path}${queryString ? `?${queryString}` : ""}`;
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchLatestPriceRevolutX(ticker, env) {
+  const symbol = toRevolutXSymbol(ticker);
+  if (!symbol) return null;
+
+  const data = await fetchRevolutX("/api/1.0/tickers", env, { symbols: symbol });
+  const tickerRow = data?.data?.find((row) => row.symbol === symbol);
+  if (tickerRow?.last_price != null) return parseFloat(tickerRow.last_price);
+  if (tickerRow?.mid != null) return parseFloat(tickerRow.mid);
+  return null;
+}
+
+async function fetchBarsRevolutX(ticker, env, range = "3mo", interval = "1d") {
+  const symbol = toRevolutXSymbol(ticker);
+  const intervalMinutes = getRevolutXIntervalMinutes(interval);
+  if (!symbol || !intervalMinutes) return [];
+
+  const until = Date.now();
+  const lookbackMs = Math.min(
+    getRangeLookbackMs(range, intervalMinutes),
+    intervalMinutes * 60 * 1000 * 5000
+  );
+  const since = Math.max(0, until - lookbackMs);
+  const path = `/api/1.0/candles/${encodeURIComponent(symbol)}`;
+  const data = await fetchRevolutX(path, env, {
+    interval: intervalMinutes,
+    since,
+    until,
+  });
+  const candles = data?.data || [];
+
+  return candles
+    .map((candle) => ({
+      time: Math.floor(Number(candle.start) / 1000),
+      open: parseFloat(candle.open),
+      high: parseFloat(candle.high),
+      low: parseFloat(candle.low),
+      close: parseFloat(candle.close),
+      volume: parseFloat(candle.volume) || 0,
+    }))
+    .filter((bar) => Number.isFinite(bar.time) && Number.isFinite(bar.close) && Number.isFinite(bar.high) && Number.isFinite(bar.low))
+    .sort((a, b) => a.time - b.time);
+}
+
+function getDataSourceLabel(env) {
+  const hasAlpaca = !!(env.ALPACA_KEY && env.ALPACA_SECRET);
+  const hasRevolutX = hasRevolutXCredentials(env);
+  if (hasAlpaca && hasRevolutX) return "ALPACA + Revolut X + Yahoo";
+  if (hasAlpaca) return "ALPACA + Yahoo";
+  if (hasRevolutX) return "Revolut X + Yahoo";
+  return "Yahoo Finance";
+}
+
 // ─────────────────────────────────────
-// DATA FETCHING — Alpaca primary, Yahoo fallback
+// DATA FETCHING — Alpaca for US stocks, Revolut X for crypto, Yahoo fallback
 // ─────────────────────────────────────
 
 // Alpaca API
@@ -165,7 +364,12 @@ async function fetchLatestPrice(ticker, env) {
     }
   }
 
-  // Yahoo fallback (stocks + crypto)
+  if (isCrypto) {
+    const revolutPrice = await fetchLatestPriceRevolutX(ticker, env);
+    if (revolutPrice) return revolutPrice;
+  }
+
+  // Yahoo fallback (all assets)
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=1d&interval=5m`;
     const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -212,8 +416,14 @@ async function fetchBarsYahoo(ticker, range = "3mo", interval = "1d") {
   }
 }
 
-// Unified fetcher: Alpaca first (real-time), Yahoo fallback
+// Unified fetcher: Revolut X for crypto, Alpaca for US stocks, Yahoo fallback
 async function fetchBars(ticker, env, range = "3mo", interval = "1d") {
+  if (ticker.includes("-USD")) {
+    const revolutBars = await fetchBarsRevolutX(ticker, env, range, interval);
+    if (revolutBars.length >= 30) return revolutBars;
+    return fetchBarsYahoo(ticker, range, interval);
+  }
+
   // Try Alpaca first (stocks only, real-time)
   const alpacaBars = await fetchBarsAlpaca(ticker, env);
   if (alpacaBars.length >= 30) return alpacaBars;
@@ -913,7 +1123,7 @@ async function handleAPI(request, env) {
       capital: +(capital || 0).toFixed(2),
       equity: +(equity || 0).toFixed(2),
       pnl: +((equity || 0) - cfg.initial_capital).toFixed(2),
-      dataSource: env.ALPACA_KEY ? "ALPACA + Yahoo" : "Yahoo Finance",
+      dataSource: getDataSourceLabel(env),
       spyStatus,
       positions: positions.map((p) => ({
         ...p,

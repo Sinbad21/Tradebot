@@ -25,6 +25,19 @@ npx wrangler d1 execute trading-bot --file=schema.sql --remote
 npx wrangler deploy
 ```
 
+### 5. Secret opzionali per i datasource
+```bash
+# US stocks real-time
+wrangler secret put ALPACA_KEY
+wrangler secret put ALPACA_SECRET
+
+# Crypto via Revolut X
+wrangler secret put REVOLUT_X_API_KEY
+wrangler secret put REVOLUT_X_PRIVATE_KEY
+```
+
+Se non configuri questi secret, il bot continua a usare Yahoo Finance come fallback.
+
 Fatto! Il bot è online su `https://trading-bot.<tuo-account>.workers.dev`
 
 ## Come funziona
