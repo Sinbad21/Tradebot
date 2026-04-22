@@ -41,6 +41,59 @@ const CONFIG_META = {
   min_hold_hours: { label: "Ore minime prima SL/TP", type: "number", step: 1 },
 };
 
+const MODE_PRESETS = {
+  safe: {
+    score_threshold: 1.2,
+    risk_per_trade: 0.01,
+    stop_loss_pct: 0.02,
+    trailing_activation: 0.02,
+    trailing_distance: 0.018,
+    min_hold_hours: 4,
+    cooldown_minutes: 60,
+    use_spy_filter: true,
+    use_weekly_filter: true,
+    use_ema50_filter: true,
+    default_slots: 3,
+  },
+  mid: {
+    score_threshold: 0.8,
+    risk_per_trade: 0.02,
+    stop_loss_pct: 0.025,
+    trailing_activation: 0.015,
+    trailing_distance: 0.012,
+    min_hold_hours: 2,
+    cooldown_minutes: 30,
+    use_spy_filter: true,
+    use_weekly_filter: true,
+    use_ema50_filter: true,
+    default_slots: 5,
+  },
+  aggressive: {
+    score_threshold: 0.5,
+    risk_per_trade: 0.03,
+    stop_loss_pct: 0.035,
+    trailing_activation: 0.01,
+    trailing_distance: 0.008,
+    min_hold_hours: 0.5,
+    cooldown_minutes: 15,
+    use_spy_filter: false,
+    use_weekly_filter: false,
+    use_ema50_filter: true,
+    default_slots: 2,
+  },
+};
+
+const MODE_ORDER = ["safe", "mid", "aggressive"];
+const ALL_BRAIN_INDICATORS = ["macd_cross", "macd_hist", "rsi", "ema_trend", "bollinger", "mean_rev", "vol_growing"];
+
+function isValidMode(mode) {
+  return Object.prototype.hasOwnProperty.call(MODE_PRESETS, mode);
+}
+
+function normalizeMode(mode = "mid") {
+  return isValidMode(mode) ? mode : "mid";
+}
+
 async function getSettings(db) {
   const rows = (await db.prepare("SELECT key, value FROM config WHERE key LIKE 'cfg_%'").all()).results || [];
   const settings = { ...CONFIG_DEFAULTS };
@@ -565,7 +618,10 @@ function addIndicators(bars) {
 // ─────────────────────────────────────
 // SIGNAL GENERATION
 // ─────────────────────────────────────
-function generateSignal(row, prev, spyRow, weights, ticker = "") {
+function generateSignal(row, prev, spyRow, weights, ticker = "", mode = "mid") {
+  const modeKey = normalizeMode(mode);
+  const preset = MODE_PRESETS[modeKey];
+  const scoreThreshold = preset.score_threshold;
   let score = 0;
   const reasons = [];
   const activeInd = [];
@@ -610,7 +666,7 @@ function generateSignal(row, prev, spyRow, weights, ticker = "") {
 
   // Filters
   let signal = 0;
-  if (score >= 0.8) {
+  if (score >= scoreThreshold) {
     let buyOk = true;
     const reject = [];
 
@@ -618,26 +674,29 @@ function generateSignal(row, prev, spyRow, weights, ticker = "") {
     if (row.volAvg > 0 && row.volume < row.volAvg * 0.6) { buyOk = false; reject.push("vol basso"); }
 
     // Weekly trend
-    if (row.ema45 < row.ema105 && !meanRev) { buyOk = false; reject.push("weekly ↓"); }
+    if (preset.use_weekly_filter && row.ema45 < row.ema105 && !meanRev) { buyOk = false; reject.push("weekly ↓"); }
 
     // SPY regime — solo per azioni USA (EU e crypto hanno mercati indipendenti)
     const isCryptoTicker = ticker.includes("-USD");
     const isEUTicker = /\.(MI|DE|PA|AS|L|MC)$/.test(ticker);
-    if (spyRow && spyRow.close < spyRow.ema50 && !meanRev && !isCryptoTicker && !isEUTicker) {
+    if (preset.use_spy_filter && spyRow && spyRow.close < spyRow.ema50 && !meanRev && !isCryptoTicker && !isEUTicker) {
       buyOk = false; reject.push("SPY<EMA50");
     }
 
     // EMA50 filter
-    if (row.close < row.ema50 && !meanRev) { score -= 0.3; if (score < 0.8) { buyOk = false; reject.push("<EMA50"); } }
+    if (preset.use_ema50_filter && row.close < row.ema50 && !meanRev) {
+      score -= 0.3;
+      if (score < scoreThreshold) { buyOk = false; reject.push("<EMA50"); }
+    }
 
     // Volume growing bonus
     if (row.volume > row.volP1 && row.volP1 > row.volP2) {
       score += w("vol_growing"); reasons.push("vol crescente"); activeInd.push("vol_growing");
     }
 
-    if (buyOk && score >= 0.8) signal = 1;
+    if (buyOk && score >= scoreThreshold) signal = 1;
     else if (reject.length) reasons.push(`FILTRATO: ${reject.join(", ")}`);
-  } else if (score <= -0.8) {
+  } else if (score <= -scoreThreshold) {
     signal = -1;
   }
 
@@ -662,32 +721,76 @@ async function getPositions(db) {
   return (await db.prepare("SELECT * FROM positions").all()).results || [];
 }
 
-async function getWeights(db) {
-  const rows = (await db.prepare("SELECT * FROM brain").all()).results || [];
+async function getModeSlots(db, mode) {
+  const modeKey = normalizeMode(mode);
+  const r = await db.prepare("SELECT value FROM config WHERE key=?").bind(`slots_${modeKey}`).first();
+  const slots = r ? parseInt(r.value, 10) : NaN;
+  return Number.isFinite(slots) ? slots : MODE_PRESETS[modeKey].default_slots;
+}
+
+async function setModeSlots(db, mode, slots) {
+  const modeKey = normalizeMode(mode);
+  const parsed = parseInt(slots, 10);
+  const n = Math.max(0, Math.min(20, Number.isFinite(parsed) ? parsed : MODE_PRESETS[modeKey].default_slots));
+  await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind(`slots_${modeKey}`, n.toString()).run();
+  return n;
+}
+
+async function getWeights(db, mode = "mid") {
+  const modeKey = normalizeMode(mode);
+  const rows = (await db.prepare(`SELECT * FROM brain_${modeKey}`).all()).results || [];
   const w = {};
   rows.forEach((r) => { w[r.indicator] = r.weight; });
   return w;
 }
 
-async function getTotalTrained(db) {
-  const r = await db.prepare("SELECT value FROM config WHERE key='total_trades'").first();
-  return r ? parseInt(r.value) : 0;
+async function getTotalTrained(db, mode = "mid") {
+  const modeKey = normalizeMode(mode);
+  const r = await db.prepare("SELECT value FROM config WHERE key=?").bind(`trades_${modeKey}`).first();
+  const trained = r ? parseInt(r.value, 10) : NaN;
+  return Number.isFinite(trained) ? trained : 0;
+}
+
+async function selectModeForSignal(db, score, ticker) {
+  if (!Number.isFinite(score)) return null;
+
+  const positions = await getPositions(db);
+  if (positions.find((p) => p.ticker === ticker)) return null;
+
+  for (const mode of MODE_ORDER) {
+    const preset = MODE_PRESETS[mode];
+    if (score < preset.score_threshold) continue;
+
+    const slotsMax = await getModeSlots(db, mode);
+    const positionsInMode = positions.filter((p) => normalizeMode(p.mode) === mode).length;
+    if (positionsInMode >= slotsMax) continue;
+
+    return mode;
+  }
+
+  return null;
 }
 
 // ─────────────────────────────────────
 // BRAIN LEARNING
 // ─────────────────────────────────────
-async function brainLearn(db, indicators, pnl, pnlPct) {
+async function brainLearn(db, indicators, pnl, pnlPct, mode = "mid") {
+  if (!isValidMode(mode)) return "";
   if (!indicators || !indicators.length) return "";
 
-  const totalTrained = await getTotalTrained(db) + 1;
-  await db.prepare("INSERT OR REPLACE INTO config VALUES ('total_trades', ?)").bind(totalTrained.toString()).run();
-  await db.prepare("INSERT INTO brain_history (indicators, pnl, pnl_pct, created_at) VALUES (?,?,?,?)")
-    .bind(JSON.stringify(indicators), pnl, pnlPct, new Date().toISOString()).run();
+  const brainTable = `brain_${mode}`;
+  const countKey = `trades_${mode}`;
+
+  const totalR = await db.prepare("SELECT value FROM config WHERE key=?").bind(countKey).first();
+  const trained = totalR ? parseInt(totalR.value, 10) : 0;
+  const totalTrained = (Number.isFinite(trained) ? trained : 0) + 1;
+  await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind(countKey, totalTrained.toString()).run();
+  await db.prepare("INSERT INTO brain_history (indicators, pnl, pnl_pct, created_at, mode) VALUES (?,?,?,?,?)")
+    .bind(JSON.stringify(indicators), pnl, pnlPct, new Date().toISOString(), mode).run();
 
   const cfg = await getSettings(db);
-  if (totalTrained < cfg.min_trades_to_learn) 
-    return `Trade ${totalTrained}/${cfg.min_trades_to_learn} — raccolta dati`;
+  if (totalTrained < cfg.min_trades_to_learn)
+    return `[${mode}] Trade ${totalTrained}/${cfg.min_trades_to_learn} — raccolta dati`;
 
   const isWin = pnl > 0;
   const magnitude = Math.min(Math.abs(pnlPct) / 5, 1.0);
@@ -697,38 +800,38 @@ async function brainLearn(db, indicators, pnl, pnlPct) {
   const DECAY_TO_DEFAULT = 0.02;
 
   for (const ind of indicators) {
-    const row = await db.prepare("SELECT weight, default_weight FROM brain WHERE indicator=?").bind(ind).first();
+    const row = await db.prepare(`SELECT weight, default_weight FROM ${brainTable} WHERE indicator=?`).bind(ind).first();
     if (!row) continue;
     let newW = isWin ? Math.min(row.weight + delta, cfg.max_weight) : Math.max(row.weight - delta, cfg.min_weight);
     newW = newW + (row.default_weight - newW) * DECAY_TO_DEFAULT;
-    await db.prepare("UPDATE brain SET weight=? WHERE indicator=?").bind(+newW.toFixed(4), ind).run();
+    await db.prepare(`UPDATE ${brainTable} SET weight=? WHERE indicator=?`).bind(+newW.toFixed(4), ind).run();
     adjustments.push(`${ind}${isWin ? "+" : "-"}${delta.toFixed(3)}`);
   }
 
   if (!isWin && indicators.length <= 2) {
-    const allInd = ["macd_cross", "macd_hist", "rsi", "ema_trend", "bollinger", "mean_rev", "vol_growing"];
-    const inactive = allInd.filter(i => !indicators.includes(i));
+    const inactive = ALL_BRAIN_INDICATORS.filter((ind) => !indicators.includes(ind));
     const smallBonus = cfg.learn_rate * 0.08 * decayFactor;
     for (const ind of inactive) {
-      const row = await db.prepare("SELECT weight, default_weight FROM brain WHERE indicator=?").bind(ind).first();
+      const row = await db.prepare(`SELECT weight, default_weight FROM ${brainTable} WHERE indicator=?`).bind(ind).first();
       if (row) {
         let newW = Math.min(row.weight + smallBonus, cfg.max_weight);
         newW = newW + (row.default_weight - newW) * DECAY_TO_DEFAULT;
-        await db.prepare("UPDATE brain SET weight=? WHERE indicator=?").bind(+newW.toFixed(4), ind).run();
+        await db.prepare(`UPDATE ${brainTable} SET weight=? WHERE indicator=?`).bind(+newW.toFixed(4), ind).run();
       }
     }
   }
 
-  return `${isWin ? "WIN" : "LOSS"} ${pnlPct > 0 ? "+" : ""}${pnlPct.toFixed(1)}% → ${adjustments.join(", ")} [lr×${decayFactor.toFixed(2)}]`;
+  return `[${mode}] ${isWin ? "WIN" : "LOSS"} ${pnlPct > 0 ? "+" : ""}${pnlPct.toFixed(1)}% → ${adjustments.join(", ")} [lr×${decayFactor.toFixed(2)}]`;
 }
 
 // ─────────────────────────────────────
 // POSITION MANAGEMENT
 // ─────────────────────────────────────
-async function openPosition(db, ticker, name, price, atr, score, activeInd) {
+async function openPosition(db, ticker, name, price, atr, score, activeInd, mode = "mid") {
+  const modeKey = normalizeMode(mode);
   const cfg = await getSettings(db);
+  const preset = MODE_PRESETS[modeKey];
   const positions = await getPositions(db);
-  if (positions.length >= cfg.max_positions) return null;
   if (positions.find((p) => p.ticker === ticker)) return null;
 
   // Cooldown check — no re-entry for N minutes after close
@@ -741,7 +844,7 @@ async function openPosition(db, ticker, name, price, atr, score, activeInd) {
   } catch (e) {}
 
   const capital = await getCapital(db);
-  const slDist = Math.max(atr * 1.5, price * cfg.stop_loss_pct);
+  const slDist = Math.max(atr * 1.5, price * preset.stop_loss_pct);
   if (slDist <= 0 || price <= 0) return null;
 
   const isCrypto = ticker.includes("-USD");
@@ -753,12 +856,12 @@ async function openPosition(db, ticker, name, price, atr, score, activeInd) {
 
   let shares;
   if (isCrypto) {
-    shares = +((capital * cfg.risk_per_trade) / slDist).toFixed(6);
+    shares = +((capital * preset.risk_per_trade) / slDist).toFixed(6);
     const maxShares = +((capital * 0.35) / price).toFixed(6);
     shares = Math.min(shares, maxShares);
     if (shares * price < 1) return null;
   } else {
-    shares = Math.max(1, Math.floor((capital * cfg.risk_per_trade) / slDist));
+    shares = Math.max(1, Math.floor((capital * preset.risk_per_trade) / slDist));
     const maxShares = Math.floor((capital * 0.35) / price);
     shares = Math.min(shares, maxShares);
     if (shares < 1) return null;
@@ -772,17 +875,19 @@ async function openPosition(db, ticker, name, price, atr, score, activeInd) {
   if (sl <= 0 || sl >= execPrice || tp <= execPrice) return null;
 
   await db.prepare(
-    `INSERT INTO positions (ticker,name,entry_price,shares,stop_loss,take_profit,highest,cost,opened_at,score_at_entry,current_price,brain_indicators)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(ticker, name, execPrice, shares, sl, tp, execPrice, cost, new Date().toISOString(), score, execPrice, JSON.stringify(activeInd)).run();
+    `INSERT INTO positions (ticker,name,entry_price,shares,stop_loss,take_profit,highest,cost,opened_at,score_at_entry,current_price,brain_indicators,mode)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(ticker, name, execPrice, shares, sl, tp, execPrice, cost, new Date().toISOString(), score, execPrice, JSON.stringify(activeInd), modeKey).run();
 
   await setCapital(db, capital - cost);
-  return { ticker, name, shares, entry_price: execPrice, stop_loss: sl, take_profit: tp, cost };
+  return { ticker, name, shares, entry_price: execPrice, stop_loss: sl, take_profit: tp, cost, mode: modeKey };
 }
 
 async function closePosition(db, ticker, price, reason) {
   const pos = await db.prepare("SELECT * FROM positions WHERE ticker=?").bind(ticker).first();
   if (!pos) return null;
+  const mode = normalizeMode(pos.mode || "mid");
+  const preset = MODE_PRESETS[mode];
 
   // Simulate sell at bid (price - spread/slippage)
   const cfg = await getSettings(db);
@@ -793,15 +898,15 @@ async function closePosition(db, ticker, price, reason) {
 
   // Save closed trade
   await db.prepare(
-    `INSERT INTO closed_trades (ticker,name,entry_price,exit_price,shares,cost,revenue,pnl,pnl_pct,reason,opened_at,closed_at,brain_indicators)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(pos.ticker, pos.name, pos.entry_price, execPrice, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators).run();
+    `INSERT INTO closed_trades (ticker,name,entry_price,exit_price,shares,cost,revenue,pnl,pnl_pct,reason,opened_at,closed_at,brain_indicators,mode)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(pos.ticker, pos.name, pos.entry_price, execPrice, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators, mode).run();
 
   // Brain learn
   let brainMsg = "";
   try {
     const indicators = JSON.parse(pos.brain_indicators || "[]");
-    brainMsg = await brainLearn(db, indicators, pnl, pnlPct);
+    brainMsg = await brainLearn(db, indicators, pnl, pnlPct, mode);
   } catch (e) {}
 
   // Update capital
@@ -813,12 +918,12 @@ async function closePosition(db, ticker, price, reason) {
 
   // Set cooldown — no re-entry for N minutes
   try {
-    const cooldownExpiry = new Date(Date.now() + cfg.cooldown_minutes * 60 * 1000).toISOString();
+    const cooldownExpiry = new Date(Date.now() + preset.cooldown_minutes * 60 * 1000).toISOString();
     await db.prepare("INSERT OR REPLACE INTO cooldowns (ticker, expires_at) VALUES (?, ?)")
       .bind(ticker, cooldownExpiry).run();
   } catch (e) {}
 
-  return { ticker, name: pos.name, pnl, pnlPct, reason, brainMsg };
+  return { ticker, name: pos.name, pnl, pnlPct, reason, brainMsg, mode };
 }
 
 // ─────────────────────────────────────
@@ -826,11 +931,17 @@ async function closePosition(db, ticker, price, reason) {
 // ─────────────────────────────────────
 async function scan(db, env) {
   const cfg = await getSettings(db);
-  const weights = await getWeights(db);
   const capital = await getCapital(db);
   const positions = await getPositions(db);
   const now = new Date().toISOString();
   const results = { buys: [], closes: [], scores: [], spyStatus: null, capital, equity: capital };
+  const weightCache = { mid: await getWeights(db, "mid") };
+
+  const getCachedWeights = async (mode) => {
+    const modeKey = normalizeMode(mode);
+    if (!weightCache[modeKey]) weightCache[modeKey] = await getWeights(db, modeKey);
+    return weightCache[modeKey];
+  };
 
   // Fetch SPY for market regime
   let spyRow = null;
@@ -854,6 +965,8 @@ async function scan(db, env) {
 
   // Update prices & check stops
   for (const pos of positions) {
+    const posMode = normalizeMode(pos.mode || "mid");
+    const posPreset = MODE_PRESETS[posMode];
     const bars = await fetchBars(pos.ticker, env, "5d", "1d");
     if (bars.length > 0) {
       const high = bars[bars.length - 1].high;
@@ -869,7 +982,7 @@ async function scan(db, env) {
 
       // Minimum hold time — don't check SL/TP until min_hold_hours
       const holdMs = Date.now() - new Date(pos.opened_at).getTime();
-      const minHoldMs = (cfg.min_hold_hours || 2) * 60 * 60 * 1000;
+      const minHoldMs = posPreset.min_hold_hours * 60 * 60 * 1000;
       if (holdMs < minHoldMs) {
         results.equity += livePrice * pos.shares;
         continue;
@@ -886,9 +999,9 @@ async function scan(db, env) {
       let sl = pos.stop_loss;
       let trailingActive = pos.trailing_active;
       const gainPct = (highest - pos.entry_price) / pos.entry_price;
-      if (gainPct >= cfg.trailing_activation) {
+      if (gainPct >= posPreset.trailing_activation) {
         trailingActive = 1;
-        const newSl = roundPrice(highest * (1 - cfg.trailing_distance), highest);
+        const newSl = roundPrice(highest * (1 - posPreset.trailing_distance), highest);
         if (newSl > sl) sl = newSl;
       }
       await db.prepare("UPDATE positions SET highest=?, stop_loss=?, trailing_active=? WHERE ticker=?")
@@ -925,17 +1038,22 @@ async function scan(db, env) {
       const prev = enriched[enriched.length - 2];
       if (isSuspiciousPrice(ticker, row.close)) continue;
 
-      const { signal, score, rsi, atr, reasons, activeInd } = generateSignal(row, prev, spyRow, weights, ticker);
+      const prelim = generateSignal(row, prev, spyRow, weightCache.mid, ticker, "mid");
+      const selectedMode = await selectModeForSignal(db, prelim.score, ticker);
+      if (!selectedMode) continue;
 
-      results.scores.push({ ticker, name, price: roundPrice(row.close), score, rsi, signal, reasons });
+      const modeWeights = await getCachedWeights(selectedMode);
+      const { signal, score, rsi, atr, reasons, activeInd } = generateSignal(row, prev, spyRow, modeWeights, ticker, selectedMode);
+
+      results.scores.push({ ticker, name, price: roundPrice(row.close), score, rsi, signal, reasons, mode: selectedMode });
 
       // Save to scan log (keep last 100)
       await db.prepare("INSERT INTO scan_log (created_at,ticker,price,score,rsi,signal,reasons) VALUES (?,?,?,?,?,?,?)")
-        .bind(now, ticker, row.close, score, rsi, signal, reasons.join(", ")).run();
+        .bind(now, ticker, row.close, score, rsi, signal, `[${selectedMode}] ${reasons.join(", ")}`).run();
 
       if (signal === 1) {
-        const pos = await openPosition(db, ticker, name, row.close, atr, score, activeInd);
-        if (pos) results.buys.push(pos);
+        const pos = await openPosition(db, ticker, name, row.close, atr, score, activeInd, selectedMode);
+        if (pos) results.buys.push({ ...pos, mode: selectedMode });
       } else if (signal === -1) {
         const existing = positions.find((p) => p.ticker === ticker);
         if (existing) {
@@ -1112,8 +1230,6 @@ async function handleAPI(request, env) {
     try {
     const capital = await getCapital(db);
     const positions = await getPositions(db);
-    const weights = await getWeights(db);
-    const totalTrained = await getTotalTrained(db);
     const closedTrades = (await db.prepare("SELECT * FROM closed_trades ORDER BY id DESC").all()).results || [];
     const recentLogs = (await db.prepare("SELECT * FROM scan_log ORDER BY id DESC LIMIT 50").all()).results || [];
 
@@ -1139,6 +1255,18 @@ async function handleAPI(request, env) {
 
     let equity = capital;
     positions.forEach((p) => { equity += (p.current_price || p.entry_price) * (p.shares || 0); });
+    const normalizedPositions = positions.map((p) => ({
+      ...p,
+      mode: normalizeMode(p.mode || "mid"),
+      trailing_active: !!p.trailing_active,
+      auto_sl: !!p.auto_sl,
+      brain_indicators: JSON.parse(p.brain_indicators || "[]"),
+      live_trend: Array.isArray(p.live_trend) ? p.live_trend : [],
+    }));
+    const normalizedClosedTrades = closedTrades.map((trade) => ({
+      ...trade,
+      mode: normalizeMode(trade.mode || "mid"),
+    }));
 
     // SPY status for bearish banner
     let spyStatus = null;
@@ -1150,9 +1278,31 @@ async function handleAPI(request, env) {
       }
     } catch (e) {}
 
-    const wins = closedTrades.filter((t) => t.pnl > 0).length;
-    const totalClosed = closedTrades.length;
+    const wins = normalizedClosedTrades.filter((t) => t.pnl > 0).length;
+    const totalClosed = normalizedClosedTrades.length;
     const cfg = await getSettings(db);
+    const modeStats = {};
+    let totalSlots = 0;
+    for (const mode of MODE_ORDER) {
+      const trained = await getTotalTrained(db, mode);
+      const closedInMode = normalizedClosedTrades.filter((trade) => trade.mode === mode);
+      const modeWins = closedInMode.filter((trade) => trade.pnl > 0).length;
+      const pnl = closedInMode.reduce((sum, trade) => sum + trade.pnl, 0);
+      const openInMode = normalizedPositions.filter((position) => position.mode === mode).length;
+      const slots = await getModeSlots(db, mode);
+      totalSlots += slots;
+      modeStats[mode] = {
+        trained,
+        trades: closedInMode.length,
+        wins: modeWins,
+        wr: closedInMode.length ? +(modeWins / closedInMode.length * 100).toFixed(1) : 0,
+        pnl: +pnl.toFixed(2),
+        open: openInMode,
+        slots,
+        weights: await getWeights(db, mode),
+        preset: MODE_PRESETS[mode],
+      };
+    }
 
     return json({
       capital: +(capital || 0).toFixed(2),
@@ -1160,18 +1310,13 @@ async function handleAPI(request, env) {
       pnl: +((equity || 0) - cfg.initial_capital).toFixed(2),
       dataSource: getDataSourceLabel(env),
       spyStatus,
-      positions: positions.map((p) => ({
-        ...p,
-        trailing_active: !!p.trailing_active,
-        auto_sl: !!p.auto_sl,
-        brain_indicators: JSON.parse(p.brain_indicators || "[]"),
-        live_trend: Array.isArray(p.live_trend) ? p.live_trend : [],
-      })),
-      closedTrades,
-      brain: { weights, totalTrained, confidence: Math.min(totalTrained / 100 * 100, 100) },
+      positions: normalizedPositions,
+      closedTrades: normalizedClosedTrades,
+      modes: modeStats,
+      brain: modeStats.mid ? { weights: modeStats.mid.weights, totalTrained: modeStats.mid.trained, confidence: Math.min(modeStats.mid.trained, 100) } : undefined,
       stats: { total: totalClosed, wins, wr: totalClosed > 0 ? +(wins / totalClosed * 100).toFixed(1) : 0 },
       recentScores: recentLogs,
-      maxPositions: cfg.max_positions,
+      maxPositions: totalSlots,
       lastScanAt: recentLogs.length ? recentLogs[0].created_at : null,
       totalScans: parseInt((await db.prepare("SELECT value FROM config WHERE key='scan_count'").first())?.value || "0"),
       scanActivity: JSON.parse((await db.prepare("SELECT value FROM config WHERE key='scan_activity'").first())?.value || "[]"),
@@ -1221,6 +1366,10 @@ async function handleAPI(request, env) {
     await db.prepare("DELETE FROM brain_history").run();
     try { await db.prepare("DELETE FROM cooldowns").run(); } catch (e) {}
     await db.prepare("UPDATE brain SET weight = default_weight").run();
+    for (const mode of MODE_ORDER) {
+      await db.prepare(`UPDATE brain_${mode} SET weight = default_weight`).run();
+      await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind(`trades_${mode}`, "0").run();
+    }
     await setCapital(db, cfg.initial_capital);
     await db.prepare("INSERT OR REPLACE INTO config VALUES ('total_trades', '0')").run();
     return json({ success: true, capital: cfg.initial_capital });
@@ -1241,6 +1390,22 @@ async function handleAPI(request, env) {
     }
     const settings = await getSettings(db);
     return json({ success: true, updated, settings });
+  }
+
+  if (path === "/api/mode-slots" && request.method === "GET") {
+    const out = {};
+    for (const mode of MODE_ORDER) out[mode] = await getModeSlots(db, mode);
+    return json(out);
+  }
+
+  if (path === "/api/mode-slots" && request.method === "POST") {
+    const body = await request.json();
+    const out = {};
+    for (const mode of MODE_ORDER) {
+      if (typeof body[mode] === "number") out[mode] = await setModeSlots(db, mode, body[mode]);
+      else out[mode] = await getModeSlots(db, mode);
+    }
+    return json({ success: true, slots: out });
   }
 
   // GET / — dashboard HTML
@@ -1708,7 +1873,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
       <thead><tr>
         <th>Asset <span class="info-i" data-tip="Nome dell'azione o crypto">ⓘ</span></th>
         <th style="text-align:right">Prezzo <span class="info-i" data-tip="Ultimo prezzo in USD">ⓘ</span></th>
-        <th style="text-align:right">Score <span class="info-i" data-tip="Punteggio da -3 a +3\\nSopra +0.8 = BUY\\nSotto -0.8 = SELL">ⓘ</span></th>
+        <th style="text-align:right">Score <span class="info-i" data-tip="Punteggio da -3 a +3\\nSoglie BUY per modalita: Safe 1.2, Mid 0.8, Aggressive 0.5">ⓘ</span></th>
         <th style="text-align:right">RSI <span class="info-i" data-tip="0-100. Sotto 30 = ipervenduto\\nSopra 70 = ipercomprato">ⓘ</span></th>
         <th style="text-align:center">Segnale <span class="info-i" data-tip="BUY = compra\\nWATCH = segnale promettente ma filtrato\\nHOLD = nessuna azione\\nSELL = pressione ribassista">ⓘ</span></th>
       </tr></thead>
@@ -1727,9 +1892,10 @@ tr:hover td{background:rgba(255,255,255,.03)}
         <th style="text-align:right">Shares</th>
         <th style="text-align:right">P&L</th>
         <th style="text-align:right">%</th>
+        <th>Modalità</th>
         <th>Motivo</th>
       </tr></thead>
-      <tbody id="tradesBody"><tr><td colspan="8" style="color:var(--text3);text-align:center">Nessuna operazione</td></tr></tbody>
+      <tbody id="tradesBody"><tr><td colspan="9" style="color:var(--text3);text-align:center">Nessuna operazione</td></tr></tbody>
     </table></div>
   </section>
 
@@ -1784,6 +1950,9 @@ tr:hover td{background:rgba(255,255,255,.03)}
     <div class="side-stat" id="bTrained">Addestrato: 0 trade</div>
     <div class="side-stat" style="font-size:.75rem;color:var(--text3);word-break:break-all" id="bLast"></div>
   </div>
+  <hr class="sep">
+  <div class="side-label">Modalità</div>
+  <div id="modesContainer"></div>
 </div>
 </div>
 
@@ -1831,6 +2000,9 @@ tr:hover td{background:rgba(255,255,255,.03)}
   <h2 class="modal-title"><i data-lucide="settings-2"></i><span>Impostazioni</span></h2>
   <p style="font-size:.8rem;color:var(--text3);margin-bottom:12px">Modifica i parametri del bot. Le modifiche si applicano dal prossimo scan.</p>
   <div id="settingsFields"></div>
+  <hr class="sep" style="margin:14px 0">
+  <div class="side-label">Slot per modalità</div>
+  <div id="modeSlotsFields"></div>
   <div style="margin-top:6px;padding:10px;background:var(--card2);border-radius:6px;display:none" id="settingsSaved">
     <span class="g">Impostazioni salvate</span>
   </div>
@@ -1953,6 +2125,35 @@ function getTickerMarket(ticker){
   if((ticker||"").includes("-USD")) return "crypto";
   if(/\.(MI|DE|PA|AS|L|MC)$/.test(ticker||"")) return "eu";
   return "us";
+}
+
+function normalizeModeClient(mode){
+  return ["safe","mid","aggressive"].includes(mode)?mode:"mid";
+}
+
+function getModeColor(mode){
+  const modeKey=normalizeModeClient(mode);
+  return modeKey==="safe"?"var(--green)":(modeKey==="aggressive"?"var(--orange)":"var(--blue)");
+}
+
+function getDefaultModeSlots(mode){
+  const modeKey=normalizeModeClient(mode);
+  return modeKey==="safe"?3:(modeKey==="aggressive"?2:5);
+}
+
+function renderModeBadge(mode){
+  const modeKey=normalizeModeClient(mode);
+  const color=getModeColor(modeKey);
+  return '<span class="badge" style="min-width:0;padding:5px 10px;border:1px solid '+color+';color:'+color+';background:rgba(255,255,255,.04)">'+modeKey+'</span>';
+}
+
+function renderModeSlotFields(slots){
+  const container=document.getElementById("modeSlotsFields");
+  if(!container) return;
+  container.innerHTML=["safe","mid","aggressive"].map((mode)=>{
+    const value=typeof slots?.[mode]==="number"?slots[mode]:getDefaultModeSlots(mode);
+    return '<label style="text-transform:capitalize">'+mode+'</label><input type="number" min="0" max="20" step="1" id="slot_'+mode+'" value="'+value+'" data-mode="'+mode+'">';
+  }).join("");
 }
 
 function renderPerformanceChart(scanActivity,closedTrades,totalPnl){
@@ -2250,6 +2451,7 @@ async function load(){
         const w=t.pnl>=0;
         const dt=t.closed_at?new Date(t.closed_at).toLocaleString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
         const reason=t.reason==="stop_loss"?"SL":(t.reason==="take_profit"?"TP":(t.reason==="manual_close"?"Manuale":t.reason));
+        const modeBadge=renderModeBadge(t.mode);
         return '<tr><td class="mono" style="font-size:.8rem">'+dt+'</td>'
           +'<td>'+t.name+'</td>'
           +'<td style="text-align:right" class="mono">$'+(t.entry_price||0).toFixed(2)+'</td>'
@@ -2257,10 +2459,11 @@ async function load(){
           +'<td style="text-align:right">'+t.shares+'</td>'
           +'<td style="text-align:right;font-weight:700" class="'+(w?"g":"r")+'">'+(w?"+":"")+"€"+t.pnl.toFixed(2)+'</td>'
           +'<td style="text-align:right" class="'+(w?"g":"r")+'">'+(t.pnl_pct>=0?"+":"")+t.pnl_pct.toFixed(1)+'%</td>'
+          +'<td>'+modeBadge+'</td>'
           +'<td><span class="badge '+(t.reason==="take_profit"?"b-buy":(t.reason==="stop_loss"?"b-sell":"b-hold"))+'">'+reason+'</span></td></tr>';
       }).join("");
     } else {
-      tb.innerHTML='<tr><td colspan="8" style="color:var(--text3);text-align:center">Nessuna operazione</td></tr>';
+      tb.innerHTML='<tr><td colspan="9" style="color:var(--text3);text-align:center">Nessuna operazione</td></tr>';
     }
 
     // Brain
@@ -2268,6 +2471,25 @@ async function load(){
     document.getElementById("bConf").textContent="Confidenza: "+(br.confidence||0).toFixed(0)+"%";
     document.getElementById("bConf").style.color=br.confidence>=50?"var(--green)":(br.confidence>=20?"var(--yellow)":"var(--text3)");
     document.getElementById("bTrained").textContent="Addestrato: "+(br.totalTrained||0)+" trade";
+    const modesEl=document.getElementById("modesContainer");
+    if(modesEl){
+      if(d.modes){
+        modesEl.innerHTML=["safe","mid","aggressive"].map((mode)=>{
+          const ms=d.modes[mode]||{};
+          const color=getModeColor(mode);
+          const pnlValue=Number(ms.pnl||0);
+          const pnlCls=pnlValue>=0?"g":"r";
+          return '<div style="background:var(--card);border-radius:8px;padding:10px;margin-bottom:6px;border-left:3px solid '+color+'">'
+            +'<div style="font-weight:700;font-size:.8rem;text-transform:capitalize;color:'+color+'">'+mode+'</div>'
+            +'<div style="font-size:.75rem;color:var(--text2)">Posizioni: '+(ms.open||0)+'/'+(ms.slots||0)+'</div>'
+            +'<div style="font-size:.75rem;color:var(--text2)">Trade: '+(ms.trades||0)+' ('+(ms.wr||0)+'% WR)</div>'
+            +'<div style="font-size:.75rem" class="'+pnlCls+'">PnL: '+(pnlValue>=0?'+':'')+'€'+pnlValue.toFixed(2)+'</div>'
+            +'</div>';
+        }).join("");
+      } else {
+        modesEl.innerHTML='<div style="font-size:.75rem;color:var(--text3)">Statistiche modalità non disponibili</div>';
+      }
+    }
 
     // Scan status
     if(d.lastScanAt){
@@ -2516,12 +2738,14 @@ document.getElementById("calcModeAuto").addEventListener("click",()=>setCalcMode
 document.getElementById("calcModeManual").addEventListener("click",()=>setCalcMode("manual"));
 
 // Settings
-let settingsMeta={};
+let settingsMeta={};let modeSlotsCache={};
 async function showSettings(){
   document.getElementById("settingsModal").style.display="flex";
   document.getElementById("settingsSaved").style.display="none";
   try{
-    const r=await fetch(API+"/settings");const d=await r.json();
+    const [settingsRes,slotsRes]=await Promise.all([fetch(API+"/settings"),fetch(API+"/mode-slots")]);
+    const d=await settingsRes.json();
+    modeSlotsCache=slotsRes.ok?await slotsRes.json():{};
     settingsMeta=d.meta||{};
     const container=document.getElementById("settingsFields");
     container.innerHTML=Object.entries(d.settings).map(([k,v])=>{
@@ -2531,6 +2755,7 @@ async function showSettings(){
       const displayVal=m.pct?(v*100).toFixed(1):v;
       return '<label>'+label+'</label><input type="number" step="'+step+'" id="cfg_'+k+'" value="'+displayVal+'" data-key="'+k+'" data-pct="'+(m.pct?"1":"0")+'">';
     }).join("");
+    renderModeSlotFields(modeSlotsCache);
   }catch(e){addLog("Errore impostazioni: "+e.message,"sell");}
 }
 function hideSettings(){document.getElementById("settingsModal").style.display="none";}
@@ -2538,18 +2763,28 @@ function hideSettings(){document.getElementById("settingsModal").style.display="
 async function saveSettings(){
   const inputs=document.querySelectorAll("#settingsFields input");
   const body={};
+  const slotBody={};
   inputs.forEach(inp=>{
     const k=inp.dataset.key;
     let v=parseFloat(inp.value);
     if(inp.dataset.pct==="1") v=v/100;
     body[k]=v;
   });
+  document.querySelectorAll("#modeSlotsFields input").forEach(inp=>{
+    slotBody[inp.dataset.mode]=parseInt(inp.value,10);
+  });
   try{
-    const r=await fetch(API+"/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    const d=await r.json();
-    if(d.success){
+    const [settingsRes,slotsRes]=await Promise.all([
+      fetch(API+"/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),
+      fetch(API+"/mode-slots",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(slotBody)})
+    ]);
+    const d=await settingsRes.json();
+    const slotData=await slotsRes.json();
+    if(d.success&&slotData.success){
+      modeSlotsCache=slotData.slots||modeSlotsCache;
       document.getElementById("settingsSaved").style.display="block";
-      addLog("Impostazioni salvate: "+d.updated.join(", "),"buy");
+      const updated=[...(d.updated||[]),"slots_safe","slots_mid","slots_aggressive"];
+      addLog("Impostazioni salvate: "+updated.join(", "),"buy");
       setTimeout(()=>{document.getElementById("settingsSaved").style.display="none";},3000);
     }
   }catch(e){addLog("Errore salvataggio: "+e.message,"sell");}
@@ -2558,10 +2793,15 @@ async function saveSettings(){
 async function resetSettings(){
   if(!confirm("Ripristinare tutte le impostazioni ai valori default?"))return;
   try{
-    const defaults={initial_capital:5000,max_positions:3,risk_per_trade:0.02,stop_loss_pct:0.025,trailing_activation:0.015,trailing_distance:0.012,cooldown_minutes:30,learn_rate:0.05,min_weight:0.05,max_weight:2.0,min_trades_to_learn:5,spread_slippage_pct:0.001};
-    const r=await fetch(API+"/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(defaults)});
-    const d=await r.json();
-    if(d.success){addLog("Impostazioni ripristinate ai default","buy");showSettings();}
+    const defaults={initial_capital:5000,max_positions:10,risk_per_trade:0.02,stop_loss_pct:0.025,trailing_activation:0.015,trailing_distance:0.012,cooldown_minutes:30,learn_rate:0.05,min_weight:0.05,max_weight:2.0,min_trades_to_learn:5,spread_slippage_pct:0.001,min_hold_hours:2};
+    const defaultSlots={safe:3,mid:5,aggressive:2};
+    const [settingsRes,slotsRes]=await Promise.all([
+      fetch(API+"/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(defaults)}),
+      fetch(API+"/mode-slots",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(defaultSlots)})
+    ]);
+    const d=await settingsRes.json();
+    const slotData=await slotsRes.json();
+    if(d.success&&slotData.success){addLog("Impostazioni ripristinate ai default","buy");showSettings();}
   }catch(e){addLog("Errore reset impostazioni: "+e.message,"sell");}
 }
 
