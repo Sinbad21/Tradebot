@@ -1630,7 +1630,8 @@ tr:hover td{background:rgba(255,255,255,.03)}
 .pos-card.pos-up{border-left-color:var(--green)}
 .pos-card.pos-down{border-left-color:var(--red)}
 .pos-main{display:flex;flex-direction:column;gap:6px;flex:1;min-width:190px}
-.pos-name{font-weight:700;font-size:.95rem}
+.pos-name{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:700;font-size:.95rem;line-height:1.2}
+.mode-pill{display:inline-flex;align-items:center;justify-content:center;padding:4px 9px;border-radius:999px;font-weight:800;font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;line-height:1;transform:translateY(1px)}
 .pos-detail{font-size:.8rem;color:var(--text2);font-family:'IBM Plex Mono',monospace}
 .pos-trend{min-width:170px;flex:1;max-width:220px;padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06)}
 .pos-trend-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -2144,7 +2145,7 @@ function getDefaultModeSlots(mode){
 function renderModeBadge(mode){
   const modeKey=normalizeModeClient(mode);
   const color=getModeColor(modeKey);
-  return '<span class="badge" style="min-width:0;padding:5px 10px;border:1px solid '+color+';color:'+color+';background:rgba(255,255,255,.04)">'+modeKey+'</span>';
+  return '<span class="mode-pill" style="border:1px solid '+color+';color:'+color+';background:rgba(255,255,255,.04)">'+modeKey+'</span>';
 }
 
 function renderModeSlotFields(slots){
