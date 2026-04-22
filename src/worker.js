@@ -1225,6 +1225,48 @@ async function handleAPI(request, env) {
     }
   }
 
+  if (path === "/api/chart") {
+    const ticker = url.searchParams.get("ticker");
+    if (!ticker) return json({ error: "ticker required" }, 400);
+
+    const interval = url.searchParams.get("interval") || "1h";
+    const range = url.searchParams.get("range") || "5d";
+    const validIntervals = ["5m", "15m", "30m", "1h", "1d"];
+    const validRanges = ["1d", "5d", "1mo", "3mo", "6mo", "1y"];
+    if (!validIntervals.includes(interval)) return json({ error: "invalid interval" }, 400);
+    if (!validRanges.includes(range)) return json({ error: "invalid range" }, 400);
+
+    try {
+      const yahooInterval = interval === "1h" ? "60m" : interval;
+      const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=${range}&interval=${yahooInterval}`;
+      const res = await fetch(yahooUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+      if (!res.ok) return json({ error: "Yahoo fetch failed", status: res.status }, 502);
+
+      const data = await res.json();
+      const result = data?.chart?.result?.[0];
+      if (!result) return json({ error: data?.chart?.error?.description || "No data", candles: [] });
+
+      const ts = result.timestamp || [];
+      const q = result.indicators?.quote?.[0] || {};
+      const candles = [];
+      for (let i = 0; i < ts.length; i++) {
+        if (q.open?.[i] != null && q.high?.[i] != null && q.low?.[i] != null && q.close?.[i] != null) {
+          candles.push({
+            time: ts[i],
+            open: q.open[i],
+            high: q.high[i],
+            low: q.low[i],
+            close: q.close[i],
+          });
+        }
+      }
+
+      return json({ ticker, interval, range, candles });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
+  }
+
   // GET /api/status — full status
   if (path === "/api/status") {
     try {
@@ -1646,14 +1688,16 @@ tr:hover td{background:rgba(255,255,255,.03)}
 .pos-expand{background:none;border:none;color:var(--accent2);cursor:pointer;font-size:1rem;padding:6px 10px;transition:transform .2s,background .15s;border-radius:10px}
 .pos-expand:hover{background:rgba(255,255,255,.05)}
 .pos-expand.open{transform:rotate(180deg)}
-.pos-close{background:transparent;border:1px solid var(--border);color:var(--text3);padding:7px 14px;border-radius:999px;cursor:pointer;font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;transition:all .15s}
+.pos-close{background:transparent;border:1px solid var(--border);color:var(--text3);padding:7px 14px;border-radius:999px;cursor:pointer;font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;transition:all .15s;display:inline-flex;align-items:center;gap:6px}
 .pos-close:hover{background:rgba(255,93,109,.12);color:#fff;border-color:rgba(255,93,109,.32)}
+.pos-chart:hover{background:rgba(59,130,246,.12);color:#fff;border-color:rgba(59,130,246,.32)}
 .pos-extra{display:none;background:rgba(255,255,255,.025);border-radius:0 0 18px 18px;padding:12px 18px;margin-top:0;border-left:3px solid var(--border);border-top:1px dashed rgba(255,255,255,.07);font-size:.8rem;color:var(--text2)}
 .pos-extra.show{display:block}
 .pos-extra-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}
 .pos-extra-row:last-child{border-bottom:none}
 .pos-extra-label{color:var(--text3);font-weight:500}
 .pos-extra-val{font-family:'IBM Plex Mono',monospace;font-weight:600}
+.lc-sm{width:14px;height:14px;stroke-width:2;flex-shrink:0}
 
 .empty-state{background:rgba(255,255,255,.03);border-radius:18px;padding:34px;text-align:center;color:var(--text4);border:1px dashed rgba(255,255,255,.08)}
 
@@ -1751,6 +1795,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
 </style>
 <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head><body>
 <div class="refresh-bar" id="refreshBar" style="width:0"></div>
 
@@ -2015,6 +2060,39 @@ tr:hover td{background:rgba(255,255,255,.03)}
 </div>
 </div>
 
+<!-- CHART MODAL -->
+<div class="modal-bg" id="chartModal">
+<div class="modal" style="width:900px;max-width:95vw">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px;flex-wrap:wrap">
+    <h2 id="chartTitle" style="margin:0">Grafico</h2>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <select id="chartInterval" style="width:auto;padding:6px 10px">
+        <option value="5m">5 min</option>
+        <option value="15m">15 min</option>
+        <option value="30m">30 min</option>
+        <option value="1h" selected>1 ora</option>
+        <option value="1d">1 giorno</option>
+      </select>
+      <select id="chartRange" style="width:auto;padding:6px 10px">
+        <option value="1d">1 giorno</option>
+        <option value="5d" selected>5 giorni</option>
+        <option value="1mo">1 mese</option>
+        <option value="3mo">3 mesi</option>
+        <option value="6mo">6 mesi</option>
+        <option value="1y">1 anno</option>
+      </select>
+    </div>
+  </div>
+  <div id="chartInfo" style="font-size:.78rem;color:var(--text2);margin-bottom:8px"></div>
+  <div id="chartContainer" style="width:100%;height:420px;background:var(--card);border-radius:8px;position:relative">
+    <div id="chartLoading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:.9rem">Caricamento…</div>
+  </div>
+  <div style="display:flex;gap:8px;margin-top:14px">
+    <button class="side-btn btn-action" style="flex:1" onclick="hideChart()">Chiudi</button>
+  </div>
+</div>
+</div>
+
 <script>
 const API=window.location.origin+"/api";
 const PAGE_META={
@@ -2028,6 +2106,10 @@ let logs=[];let lastSeenScan=0;let performanceChart=null;let positionCharts=[];l
 
 function renderIcons(){
   if(window.lucide&&window.lucide.createIcons) window.lucide.createIcons();
+}
+
+function refreshIcons(){
+  renderIcons();
 }
 
 function normalizePage(page){
@@ -2332,6 +2414,240 @@ function renderOverview(d,scores){
   renderPerformanceChart(scanActivity,closedTrades,d.pnl||0);
 }
 
+// ═══════════════════════════════════════════
+// CHART MODAL
+// ═══════════════════════════════════════════
+let chartInstance=null;
+let candleSeries=null;
+let chartContext=null;
+
+function getChartPricePrecision(price){
+  const priceMagnitude=Math.abs(price||0);
+  if(priceMagnitude<0.0001) return 8;
+  if(priceMagnitude<0.01) return 6;
+  if(priceMagnitude<1) return 4;
+  return 2;
+}
+
+function findNearestCandleTime(candles,targetTime){
+  if(!Array.isArray(candles)||!candles.length||!Number.isFinite(targetTime)) return null;
+  let bestTime=candles[0].time;
+  let bestDistance=Math.abs(candles[0].time-targetTime);
+  for(const candle of candles){
+    const distance=Math.abs(candle.time-targetTime);
+    if(distance<bestDistance){
+      bestDistance=distance;
+      bestTime=candle.time;
+    }
+  }
+  return bestTime;
+}
+
+function openChart(ctx){
+  chartContext=ctx;
+  document.getElementById("chartModal").style.display="flex";
+  document.getElementById("chartTitle").textContent=(ctx.name||ctx.ticker)+" — "+ctx.ticker;
+
+  const precision=getChartPricePrecision(ctx.entry||ctx.exit||0);
+  const info=document.getElementById("chartInfo");
+  const parts=[];
+  if(Number.isFinite(ctx.entry)) parts.push("Entry: $"+ctx.entry.toFixed(precision));
+  if(ctx.exit!=null) parts.push("Exit: $"+ctx.exit.toFixed(precision));
+  if(ctx.pnl!=null) parts.push("P&L: "+(ctx.pnl>=0?"+":"")+"€"+ctx.pnl.toFixed(2));
+  if(ctx.mode) parts.push("Mode: "+ctx.mode);
+  info.innerHTML=parts.join(" • ");
+
+  autoSelectTimeframe(ctx);
+  if(typeof refreshIcons==="function") refreshIcons();
+  loadChart();
+}
+
+function hideChart(){
+  document.getElementById("chartModal").style.display="none";
+  if(chartInstance){
+    chartInstance.remove();
+    chartInstance=null;
+    candleSeries=null;
+  }
+  chartContext=null;
+}
+
+function autoSelectTimeframe(ctx){
+  const intervalEl=document.getElementById("chartInterval");
+  const rangeEl=document.getElementById("chartRange");
+  if(!ctx?.entryTime){
+    intervalEl.value="1h";
+    rangeEl.value="5d";
+    return;
+  }
+
+  const endTime=ctx.exitTime?new Date(ctx.exitTime).getTime():Date.now();
+  const startTime=new Date(ctx.entryTime).getTime();
+  const durationHours=(endTime-startTime)/(1000*60*60);
+
+  if(durationHours<6){intervalEl.value="5m";rangeEl.value="1d";}
+  else if(durationHours<24){intervalEl.value="15m";rangeEl.value="5d";}
+  else if(durationHours<24*7){intervalEl.value="1h";rangeEl.value="1mo";}
+  else if(durationHours<24*30){intervalEl.value="1h";rangeEl.value="3mo";}
+  else {intervalEl.value="1d";rangeEl.value="6mo";}
+}
+
+async function loadChart(){
+  if(!chartContext) return;
+
+  const loadingEl=document.getElementById("chartLoading");
+  loadingEl.textContent="Caricamento…";
+  loadingEl.style.display="flex";
+
+  const container=document.getElementById("chartContainer");
+  if(chartInstance){
+    chartInstance.remove();
+    chartInstance=null;
+    candleSeries=null;
+  }
+
+  const interval=document.getElementById("chartInterval").value;
+  const range=document.getElementById("chartRange").value;
+  const activeContext=chartContext;
+
+  try{
+    if(!window.LightweightCharts){
+      loadingEl.textContent="Libreria grafico non caricata";
+      return;
+    }
+
+    const res=await fetch(API+"/chart?ticker="+encodeURIComponent(chartContext.ticker)+"&interval="+interval+"&range="+range);
+    const data=await res.json();
+    if(!chartContext||chartContext!==activeContext) return;
+
+    if(data.error){
+      loadingEl.textContent="Errore: "+data.error;
+      return;
+    }
+    if(!data.candles||data.candles.length===0){
+      loadingEl.textContent="Nessun dato disponibile. Prova un range maggiore o un intervallo più ampio.";
+      return;
+    }
+
+    const precision=getChartPricePrecision(chartContext.entry);
+    chartInstance=LightweightCharts.createChart(container,{
+      width:container.clientWidth,
+      height:420,
+      layout:{background:{color:"transparent"},textColor:"#94a3b8"},
+      grid:{vertLines:{color:"#252e42"},horzLines:{color:"#252e42"}},
+      crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+      rightPriceScale:{borderColor:"#2d3a52"},
+      timeScale:{borderColor:"#2d3a52",timeVisible:true,secondsVisible:false},
+    });
+
+    candleSeries=chartInstance.addCandlestickSeries({
+      upColor:"#10b981",
+      downColor:"#ef4444",
+      borderUpColor:"#10b981",
+      borderDownColor:"#ef4444",
+      wickUpColor:"#10b981",
+      wickDownColor:"#ef4444",
+      priceFormat:{type:"price",precision,minMove:Math.pow(10,-precision)},
+    });
+
+    candleSeries.setData(data.candles);
+
+    const markers=[];
+    const entryTimeSec=Math.floor(new Date(chartContext.entryTime).getTime()/1000);
+    const entryMarkerTime=findNearestCandleTime(data.candles,entryTimeSec);
+    if(entryMarkerTime!=null){
+      markers.push({
+        time:entryMarkerTime,
+        position:"belowBar",
+        color:"#3b82f6",
+        shape:"arrowUp",
+        text:"Entry $"+chartContext.entry.toFixed(precision),
+      });
+    }
+    if(chartContext.exitTime&&chartContext.exit!=null){
+      const exitTimeSec=Math.floor(new Date(chartContext.exitTime).getTime()/1000);
+      const exitMarkerTime=findNearestCandleTime(data.candles,exitTimeSec);
+      if(exitMarkerTime!=null){
+        const exitColor=(chartContext.pnl||0)>=0?"#10b981":"#ef4444";
+        markers.push({
+          time:exitMarkerTime,
+          position:"aboveBar",
+          color:exitColor,
+          shape:"arrowDown",
+          text:"Exit $"+chartContext.exit.toFixed(precision),
+        });
+      }
+    }
+    candleSeries.setMarkers(markers);
+
+    if(chartContext.sl&&chartContext.sl>0){
+      candleSeries.createPriceLine({
+        price:chartContext.sl,
+        color:"#ef4444",
+        lineWidth:1,
+        lineStyle:LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible:true,
+        title:"SL",
+      });
+    }
+    if(chartContext.tp&&chartContext.tp>0){
+      candleSeries.createPriceLine({
+        price:chartContext.tp,
+        color:"#10b981",
+        lineWidth:1,
+        lineStyle:LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible:true,
+        title:"TP",
+      });
+    }
+
+    chartInstance.timeScale().fitContent();
+    loadingEl.style.display="none";
+
+    const resizeHandler=()=>{
+      if(chartInstance) chartInstance.applyOptions({width:container.clientWidth});
+    };
+    window.addEventListener("resize",resizeHandler);
+  }catch(e){
+    if(!chartContext||chartContext!==activeContext) return;
+    loadingEl.textContent="Errore: "+e.message;
+  }
+}
+
+function showPosChart(idx){
+  const p=(lastPositions||[])[idx];
+  if(!p) return;
+  openChart({
+    ticker:p.ticker,
+    name:p.name,
+    entry:p.entry_price,
+    exit:null,
+    sl:p.stop_loss,
+    tp:p.take_profit,
+    entryTime:p.opened_at,
+    exitTime:null,
+    mode:p.mode,
+    pnl:null,
+  });
+}
+
+function showTradeChart(idx){
+  const t=(lastClosedTrades||[])[idx];
+  if(!t) return;
+  openChart({
+    ticker:t.ticker,
+    name:t.name,
+    entry:t.entry_price,
+    exit:t.exit_price,
+    sl:null,
+    tp:null,
+    entryTime:t.opened_at,
+    exitTime:t.closed_at,
+    mode:t.mode,
+    pnl:t.pnl,
+  });
+}
+
 async function load(){
   const bar=document.getElementById("refreshBar");bar.style.width="30%";
   try{
@@ -2388,7 +2704,8 @@ async function load(){
           +'<div class="pos-trend"><div class="pos-trend-head"><span class="pos-trend-label">Trend live</span><span class="pos-trend-value '+(trendReady?(trendPct>=0?"g":"r"):'')+'">'+(trendReady?((trendPct>=0?"+":"")+trendPct.toFixed(2)+"%"):'No feed')+'</span></div><div class="pos-trend-chart"><canvas id="posTrend'+i+'"></canvas><div class="pos-trend-empty'+(trendReady?' hidden':'')+'" id="posTrendEmpty'+i+'">Trend live in attesa</div></div></div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
           +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
-          +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')">Chiudi</button></div>'
+          +'<button class="pos-close pos-chart" onclick="showPosChart('+i+')"><i data-lucide="line-chart" class="lc-sm"></i> Grafico</button>'
+          +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')"><i data-lucide="x" class="lc-sm"></i> Chiudi</button></div>'
           +'<div class="pos-extra" id="posExtra'+i+'">'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Costo apertura</span><span class="pos-extra-val">€'+p.cost.toFixed(2)+'</span></div>'
           +'<div class="pos-extra-row"><span class="pos-extra-label">Valore attuale</span><span class="pos-extra-val '+(up?"g":"r")+'">€'+curVal.toFixed(2)+'</span></div>'
@@ -2449,12 +2766,12 @@ async function load(){
     // Trades history
     const tb=document.getElementById("tradesBody");
     if(d.closedTrades&&d.closedTrades.length){
-      tb.innerHTML=d.closedTrades.map(t=>{
+      tb.innerHTML=d.closedTrades.map((t,i)=>{
         const w=t.pnl>=0;
         const dt=t.closed_at?new Date(t.closed_at).toLocaleString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
         const reason=t.reason==="stop_loss"?"SL":(t.reason==="take_profit"?"TP":(t.reason==="manual_close"?"Manuale":t.reason));
         const modeBadge=renderModeBadge(t.mode);
-        return '<tr><td class="mono" style="font-size:.8rem">'+dt+'</td>'
+        return '<tr style="cursor:pointer" onclick="showTradeChart('+i+')" title="Clicca per grafico"><td class="mono" style="font-size:.8rem">'+dt+'</td>'
           +'<td>'+t.name+'</td>'
           +'<td style="text-align:right" class="mono">$'+(t.entry_price||0).toFixed(2)+'</td>'
           +'<td style="text-align:right" class="mono">$'+(t.exit_price||0).toFixed(2)+'</td>'
@@ -2545,6 +2862,7 @@ async function load(){
     }
 
     updatePageHeader();
+    refreshIcons();
 
     bar.style.width="100%";setTimeout(()=>{bar.style.width="0"},400);
   }catch(e){
@@ -2736,8 +3054,11 @@ function fmt(v){return (v>=0?"+":"")+"\u20ac"+v.toFixed(2);}
 // Close modal on bg click
 document.getElementById("calcModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideCalc();});
 document.getElementById("settingsModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideSettings();});
+document.getElementById("chartModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideChart();});
 document.getElementById("calcModeAuto").addEventListener("click",()=>setCalcMode("auto"));
 document.getElementById("calcModeManual").addEventListener("click",()=>setCalcMode("manual"));
+document.getElementById("chartInterval").addEventListener("change",loadChart);
+document.getElementById("chartRange").addEventListener("change",loadChart);
 
 // Settings
 let settingsMeta={};let modeSlotsCache={};
