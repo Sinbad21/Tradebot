@@ -130,6 +130,15 @@ const MODE_PRESETS_FX = {
 
 const MODE_ORDER = ["safe", "mid", "aggressive"];
 const ALL_BRAIN_INDICATORS = ["macd_cross", "macd_hist", "rsi", "ema_trend", "bollinger", "mean_rev", "vol_growing"];
+const DEFAULT_BRAIN_WEIGHTS = {
+  macd_cross: 1.0,
+  macd_hist: 0.2,
+  rsi: 0.6,
+  ema_trend: 0.3,
+  bollinger: 0.5,
+  mean_rev: 0.8,
+  vol_growing: 0.3,
+};
 
 function isValidMode(mode) {
   return Object.prototype.hasOwnProperty.call(MODE_PRESETS, mode);
@@ -137,6 +146,100 @@ function isValidMode(mode) {
 
 function normalizeMode(mode = "mid") {
   return isValidMode(mode) ? mode : "mid";
+}
+
+async function seedBrainTable(db, tableName) {
+  for (const indicator of ALL_BRAIN_INDICATORS) {
+    const defaultWeight = DEFAULT_BRAIN_WEIGHTS[indicator] ?? 1.0;
+    await db.prepare(`INSERT OR IGNORE INTO ${tableName} (indicator, weight, default_weight) VALUES (?, ?, ?)`).bind(indicator, defaultWeight, defaultWeight).run();
+  }
+}
+
+async function ensureFxSchema(db) {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS positions_fx (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    shares REAL NOT NULL,
+    stop_loss REAL NOT NULL,
+    take_profit REAL NOT NULL,
+    highest REAL NOT NULL,
+    trailing_active INTEGER DEFAULT 0,
+    cost REAL NOT NULL,
+    opened_at TEXT NOT NULL,
+    score_at_entry REAL,
+    auto_sl INTEGER DEFAULT 1,
+    current_price REAL,
+    unrealized_pnl REAL DEFAULT 0,
+    unrealized_pct REAL DEFAULT 0,
+    brain_indicators TEXT DEFAULT '[]',
+    mode TEXT DEFAULT 'mid'
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS closed_trades_fx (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    name TEXT NOT NULL,
+    entry_price REAL,
+    exit_price REAL,
+    shares REAL,
+    cost REAL,
+    revenue REAL,
+    pnl REAL,
+    pnl_pct REAL,
+    reason TEXT,
+    opened_at TEXT,
+    closed_at TEXT,
+    brain_indicators TEXT DEFAULT '[]',
+    mode TEXT DEFAULT 'mid'
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS scan_log_fx (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    ticker TEXT,
+    price REAL,
+    score REAL,
+    rsi REAL,
+    signal INTEGER,
+    reasons TEXT
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS cooldowns_fx (
+    ticker TEXT PRIMARY KEY,
+    expires_at TEXT NOT NULL
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS brain_history_fx (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    indicators TEXT,
+    pnl REAL,
+    pnl_pct REAL,
+    created_at TEXT,
+    mode TEXT DEFAULT 'mid'
+  )`).run();
+
+  for (const mode of MODE_ORDER) {
+    await db.prepare(`CREATE TABLE IF NOT EXISTS brain_${mode}_fx (
+      indicator TEXT PRIMARY KEY,
+      weight REAL NOT NULL,
+      default_weight REAL NOT NULL
+    )`).run();
+    await seedBrainTable(db, `brain_${mode}_fx`);
+    await db.prepare("INSERT OR IGNORE INTO config VALUES (?, ?)").bind(`trades_${mode}_fx`, "0").run();
+    await db.prepare("INSERT OR IGNORE INTO config VALUES (?, ?)").bind(`slots_${mode}_fx`, String(MODE_PRESETS_FX[mode].default_slots)).run();
+  }
+
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('initial_capital_fx', '1000')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('capital_fx', '1000')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('scan_count_fx', '0')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('scan_activity_fx', '[]')").run();
 }
 
 async function getSettings(db) {
@@ -1176,6 +1279,7 @@ async function brainLearnFx(db, indicators, pnl, pnlPct, mode = "mid") {
 }
 
 async function scanFx(db, env) {
+  await ensureFxSchema(db);
   const capital = await getCapitalFx(db);
   const initialCapital = await getInitialCapitalFx(db);
   const positions = await getPositionsFx(db);
@@ -1614,6 +1718,10 @@ async function handleAPI(request, env) {
       }
       return Response.redirect(url.origin + "/login", 302);
     }
+  }
+
+  if (path.startsWith("/api/fx/")) {
+    await ensureFxSchema(db);
   }
 
   if (path === "/api/chart") {
