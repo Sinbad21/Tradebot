@@ -83,6 +83,51 @@ const MODE_PRESETS = {
   },
 };
 
+const MODE_PRESETS_FX = {
+  safe: {
+    score_threshold: 1.2,
+    risk_per_trade: 0.01,
+    stop_loss_pct: 0.008,
+    trailing_activation: 0.008,
+    trailing_distance: 0.005,
+    min_hold_hours: 4,
+    cooldown_minutes: 60,
+    use_spy_filter: false,
+    use_weekly_filter: true,
+    use_ema50_filter: true,
+    use_volume_filter: false,
+    default_slots: 2,
+  },
+  mid: {
+    score_threshold: 0.8,
+    risk_per_trade: 0.02,
+    stop_loss_pct: 0.012,
+    trailing_activation: 0.006,
+    trailing_distance: 0.004,
+    min_hold_hours: 2,
+    cooldown_minutes: 30,
+    use_spy_filter: false,
+    use_weekly_filter: true,
+    use_ema50_filter: true,
+    use_volume_filter: false,
+    default_slots: 3,
+  },
+  aggressive: {
+    score_threshold: 0.5,
+    risk_per_trade: 0.03,
+    stop_loss_pct: 0.015,
+    trailing_activation: 0.004,
+    trailing_distance: 0.003,
+    min_hold_hours: 0.5,
+    cooldown_minutes: 15,
+    use_spy_filter: false,
+    use_weekly_filter: false,
+    use_ema50_filter: true,
+    use_volume_filter: false,
+    default_slots: 1,
+  },
+};
+
 const MODE_ORDER = ["safe", "mid", "aggressive"];
 const ALL_BRAIN_INDICATORS = ["macd_cross", "macd_hist", "rsi", "ema_trend", "bollinger", "mean_rev", "vol_growing"];
 
@@ -139,6 +184,19 @@ const WATCHLIST = {
   "SUI-USD": "SUI", "INJ-USD": "Injective", "RENDER-USD": "Render",
   "FET-USD": "Fetch.ai", "PEPE-USD": "Pepe", "SHIB-USD": "Shiba Inu",
   "TON-USD": "Toncoin", "TRX-USD": "Tron", "FIL-USD": "Filecoin",
+};
+
+const WATCHLIST_FX = {
+  "EURUSD=X": "EUR/USD",
+  "GBPUSD=X": "GBP/USD",
+  "USDJPY=X": "USD/JPY",
+  "USDCHF=X": "USD/CHF",
+  "AUDUSD=X": "AUD/USD",
+  "USDCAD=X": "USD/CAD",
+  "NZDUSD=X": "NZD/USD",
+  "EURGBP=X": "EUR/GBP",
+  "EURJPY=X": "EUR/JPY",
+  "GBPJPY=X": "GBP/JPY",
 };
 
 const LOW_PRICE_CRYPTO_TICKERS = new Set(["PEPE-USD", "SHIB-USD"]);
@@ -618,9 +676,9 @@ function addIndicators(bars) {
 // ─────────────────────────────────────
 // SIGNAL GENERATION
 // ─────────────────────────────────────
-function generateSignal(row, prev, spyRow, weights, ticker = "", mode = "mid") {
+function generateSignal(row, prev, spyRow, weights, ticker = "", mode = "mid", presetsObj = MODE_PRESETS) {
   const modeKey = normalizeMode(mode);
-  const preset = MODE_PRESETS[modeKey];
+  const preset = (presetsObj && presetsObj[modeKey]) ? presetsObj[modeKey] : MODE_PRESETS[modeKey];
   const scoreThreshold = preset.score_threshold;
   let score = 0;
   const reasons = [];
@@ -669,9 +727,10 @@ function generateSignal(row, prev, spyRow, weights, ticker = "", mode = "mid") {
   if (score >= scoreThreshold) {
     let buyOk = true;
     const reject = [];
+    const useVolumeFilter = preset.use_volume_filter !== false;
 
     // Volume
-    if (row.volAvg > 0 && row.volume < row.volAvg * 0.6) { buyOk = false; reject.push("vol basso"); }
+    if (useVolumeFilter && row.volAvg > 0 && row.volume < row.volAvg * 0.6) { buyOk = false; reject.push("vol basso"); }
 
     // Weekly trend
     if (preset.use_weekly_filter && row.ema45 < row.ema105 && !meanRev) { buyOk = false; reject.push("weekly ↓"); }
@@ -690,7 +749,7 @@ function generateSignal(row, prev, spyRow, weights, ticker = "", mode = "mid") {
     }
 
     // Volume growing bonus
-    if (row.volume > row.volP1 && row.volP1 > row.volP2) {
+    if (useVolumeFilter && row.volume > row.volP1 && row.volP1 > row.volP2) {
       score += w("vol_growing"); reasons.push("vol crescente"); activeInd.push("vol_growing");
     }
 
@@ -713,12 +772,30 @@ async function getCapital(db) {
   return cfg.initial_capital;
 }
 
+async function getInitialCapitalFx(db) {
+  const r = await db.prepare("SELECT value FROM config WHERE key='initial_capital_fx'").first();
+  return r ? parseFloat(r.value) : 1000;
+}
+
 async function setCapital(db, val) {
   await db.prepare("INSERT OR REPLACE INTO config VALUES ('capital', ?)").bind(val.toFixed(2)).run();
 }
 
+async function getCapitalFx(db) {
+  const r = await db.prepare("SELECT value FROM config WHERE key='capital_fx'").first();
+  return r ? parseFloat(r.value) : 1000;
+}
+
+async function setCapitalFx(db, val) {
+  await db.prepare("INSERT OR REPLACE INTO config VALUES ('capital_fx', ?)").bind(val.toFixed(2)).run();
+}
+
 async function getPositions(db) {
   return (await db.prepare("SELECT * FROM positions").all()).results || [];
+}
+
+async function getPositionsFx(db) {
+  return (await db.prepare("SELECT * FROM positions_fx").all()).results || [];
 }
 
 async function getModeSlots(db, mode) {
@@ -736,9 +813,32 @@ async function setModeSlots(db, mode, slots) {
   return n;
 }
 
+async function getModeSlotsFx(db, mode) {
+  const modeKey = normalizeMode(mode);
+  const r = await db.prepare("SELECT value FROM config WHERE key=?").bind(`slots_${modeKey}_fx`).first();
+  const slots = r ? parseInt(r.value, 10) : NaN;
+  return Number.isFinite(slots) ? slots : MODE_PRESETS_FX[modeKey].default_slots;
+}
+
+async function setModeSlotsFx(db, mode, slots) {
+  const modeKey = normalizeMode(mode);
+  const parsed = parseInt(slots, 10);
+  const n = Math.max(0, Math.min(10, Number.isFinite(parsed) ? parsed : MODE_PRESETS_FX[modeKey].default_slots));
+  await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind(`slots_${modeKey}_fx`, n.toString()).run();
+  return n;
+}
+
 async function getWeights(db, mode = "mid") {
   const modeKey = normalizeMode(mode);
   const rows = (await db.prepare(`SELECT * FROM brain_${modeKey}`).all()).results || [];
+  const w = {};
+  rows.forEach((r) => { w[r.indicator] = r.weight; });
+  return w;
+}
+
+async function getWeightsFx(db, mode = "mid") {
+  const modeKey = normalizeMode(mode);
+  const rows = (await db.prepare(`SELECT * FROM brain_${modeKey}_fx`).all()).results || [];
   const w = {};
   rows.forEach((r) => { w[r.indicator] = r.weight; });
   return w;
@@ -763,6 +863,26 @@ async function selectModeForSignal(db, score, ticker) {
 
     const slotsMax = await getModeSlots(db, mode);
     const positionsInMode = positions.filter((p) => normalizeMode(p.mode) === mode).length;
+    if (positionsInMode >= slotsMax) continue;
+
+    return mode;
+  }
+
+  return null;
+}
+
+async function selectModeForSignalFx(db, score, ticker) {
+  if (!Number.isFinite(score)) return null;
+
+  const positions = await getPositionsFx(db);
+  if (positions.find((p) => p.ticker === ticker)) return null;
+
+  for (const mode of MODE_ORDER) {
+    const preset = MODE_PRESETS_FX[mode];
+    if (score < preset.score_threshold) continue;
+
+    const slotsMax = await getModeSlotsFx(db, mode);
+    const positionsInMode = positions.filter((p) => normalizeMode(p.mode || "mid") === mode).length;
     if (positionsInMode >= slotsMax) continue;
 
     return mode;
@@ -924,6 +1044,277 @@ async function closePosition(db, ticker, price, reason) {
   } catch (e) {}
 
   return { ticker, name: pos.name, pnl, pnlPct, reason, brainMsg, mode };
+}
+
+function getFxPriceDecimals(ticker = "") {
+  return ticker.includes("JPY") ? 2 : 4;
+}
+
+function roundFxPrice(price, ticker = "") {
+  return +price.toFixed(getFxPriceDecimals(ticker));
+}
+
+async function openPositionFx(db, ticker, name, price, atr, score, activeInd, mode = "mid") {
+  const modeKey = normalizeMode(mode);
+  const preset = MODE_PRESETS_FX[modeKey];
+  const positions = await getPositionsFx(db);
+  if (positions.find((p) => p.ticker === ticker)) return null;
+
+  try {
+    const cooldown = await db.prepare("SELECT expires_at FROM cooldowns_fx WHERE ticker=?").bind(ticker).first();
+    if (cooldown && new Date(cooldown.expires_at) > new Date()) return null;
+    if (cooldown) await db.prepare("DELETE FROM cooldowns_fx WHERE ticker=?").bind(ticker).run();
+  } catch (e) {}
+
+  const capital = await getCapitalFx(db);
+  const slDist = Math.max(atr * 1.5, price * preset.stop_loss_pct);
+  if (slDist <= 0 || price <= 0) return null;
+  if (slDist < 0.00001) return null;
+
+  let shares = (capital * preset.risk_per_trade) / slDist;
+  const maxShares = (capital * 0.5) / price;
+  shares = +Math.min(shares, maxShares).toFixed(2);
+  if (shares * price < 10) return null;
+
+  const cfg = await getSettings(db);
+  const execPrice = roundFxPrice(price * (1 + cfg.spread_slippage_pct), ticker);
+  const cost = +(shares * execPrice).toFixed(2);
+  const sl = roundFxPrice(execPrice - slDist, ticker);
+  const tp = roundFxPrice(execPrice + slDist * 2, ticker);
+  if (sl <= 0 || sl >= execPrice || tp <= execPrice) return null;
+
+  await db.prepare(
+    `INSERT INTO positions_fx (ticker,name,entry_price,shares,stop_loss,take_profit,highest,cost,opened_at,score_at_entry,current_price,brain_indicators,mode)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(ticker, name, execPrice, shares, sl, tp, execPrice, cost, new Date().toISOString(), score, execPrice, JSON.stringify(activeInd), modeKey).run();
+
+  await setCapitalFx(db, capital - cost);
+  return { ticker, name, shares, entry_price: execPrice, stop_loss: sl, take_profit: tp, cost, mode: modeKey };
+}
+
+async function closePositionFx(db, ticker, price, reason) {
+  const pos = await db.prepare("SELECT * FROM positions_fx WHERE ticker=?").bind(ticker).first();
+  if (!pos) return null;
+  const mode = normalizeMode(pos.mode || "mid");
+  const preset = MODE_PRESETS_FX[mode];
+
+  const cfg = await getSettings(db);
+  const execPrice = roundFxPrice(price * (1 - cfg.spread_slippage_pct), pos.ticker);
+  const revenue = pos.shares * execPrice;
+  const pnl = +(revenue - pos.cost).toFixed(2);
+  const pnlPct = +((execPrice - pos.entry_price) / pos.entry_price * 100).toFixed(2);
+
+  await db.prepare(
+    `INSERT INTO closed_trades_fx (ticker,name,entry_price,exit_price,shares,cost,revenue,pnl,pnl_pct,reason,opened_at,closed_at,brain_indicators,mode)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(pos.ticker, pos.name, pos.entry_price, execPrice, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators, mode).run();
+
+  let brainMsg = "";
+  try {
+    brainMsg = await brainLearnFx(db, JSON.parse(pos.brain_indicators || "[]"), pnl, pnlPct, mode);
+  } catch (e) {}
+
+  await setCapitalFx(db, (await getCapitalFx(db)) + revenue);
+  await db.prepare("DELETE FROM positions_fx WHERE ticker=?").bind(ticker).run();
+
+  try {
+    await db.prepare("INSERT OR REPLACE INTO cooldowns_fx (ticker, expires_at) VALUES (?, ?)")
+      .bind(ticker, new Date(Date.now() + preset.cooldown_minutes * 60 * 1000).toISOString()).run();
+  } catch (e) {}
+
+  return { ticker, name: pos.name, pnl, pnlPct, reason, brainMsg, mode };
+}
+
+async function brainLearnFx(db, indicators, pnl, pnlPct, mode = "mid") {
+  if (!indicators || !indicators.length) return "";
+  if (!MODE_ORDER.includes(mode)) return "";
+
+  const brainTable = `brain_${mode}_fx`;
+  const countKey = `trades_${mode}_fx`;
+
+  const totalR = await db.prepare("SELECT value FROM config WHERE key=?").bind(countKey).first();
+  const totalTrained = (totalR ? parseInt(totalR.value, 10) : 0) + 1;
+  await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind(countKey, totalTrained.toString()).run();
+
+  await db.prepare("INSERT INTO brain_history_fx (indicators, pnl, pnl_pct, created_at, mode) VALUES (?,?,?,?,?)")
+    .bind(JSON.stringify(indicators), pnl, pnlPct, new Date().toISOString(), mode).run();
+
+  const cfg = await getSettings(db);
+  if (totalTrained < cfg.min_trades_to_learn)
+    return `[FX ${mode}] Trade ${totalTrained}/${cfg.min_trades_to_learn} — raccolta dati`;
+
+  const isWin = pnl > 0;
+  const magnitude = Math.min(Math.abs(pnlPct) / 5, 1.0);
+  const decayFactor = Math.max(0.3, 1.0 - (totalTrained / 500));
+  const delta = cfg.learn_rate * magnitude * decayFactor;
+  const adjustments = [];
+  const DECAY_TO_DEFAULT = 0.02;
+
+  for (const ind of indicators) {
+    const row = await db.prepare(`SELECT weight, default_weight FROM ${brainTable} WHERE indicator=?`).bind(ind).first();
+    if (!row) continue;
+    let newW = isWin ? Math.min(row.weight + delta, cfg.max_weight) : Math.max(row.weight - delta, cfg.min_weight);
+    newW = newW + (row.default_weight - newW) * DECAY_TO_DEFAULT;
+    await db.prepare(`UPDATE ${brainTable} SET weight=? WHERE indicator=?`).bind(+newW.toFixed(4), ind).run();
+    adjustments.push(`${ind}${isWin ? "+" : "-"}${delta.toFixed(3)}`);
+  }
+
+  if (!isWin && indicators.length <= 2) {
+    const inactive = ALL_BRAIN_INDICATORS.filter((ind) => !indicators.includes(ind));
+    const smallBonus = cfg.learn_rate * 0.08 * decayFactor;
+    for (const ind of inactive) {
+      const row = await db.prepare(`SELECT weight, default_weight FROM ${brainTable} WHERE indicator=?`).bind(ind).first();
+      if (row) {
+        let newW = Math.min(row.weight + smallBonus, cfg.max_weight);
+        newW = newW + (row.default_weight - newW) * DECAY_TO_DEFAULT;
+        await db.prepare(`UPDATE ${brainTable} SET weight=? WHERE indicator=?`).bind(+newW.toFixed(4), ind).run();
+      }
+    }
+  }
+
+  return `[FX ${mode}] ${isWin ? "WIN" : "LOSS"} ${pnlPct > 0 ? "+" : ""}${pnlPct.toFixed(1)}% → ${adjustments.join(", ")} [lr×${decayFactor.toFixed(2)}]`;
+}
+
+async function scanFx(db, env) {
+  const capital = await getCapitalFx(db);
+  const initialCapital = await getInitialCapitalFx(db);
+  const positions = await getPositionsFx(db);
+  const now = new Date().toISOString();
+  const results = { buys: [], closes: [], scores: [], capital, equity: capital, pairsMonitored: Object.keys(WATCHLIST_FX).length };
+  const weightCache = { mid: await getWeightsFx(db, "mid") };
+
+  const getCachedWeightsFx = async (mode) => {
+    const modeKey = normalizeMode(mode);
+    if (!weightCache[modeKey]) weightCache[modeKey] = await getWeightsFx(db, modeKey);
+    return weightCache[modeKey];
+  };
+
+  for (const pos of positions) {
+    const posMode = normalizeMode(pos.mode || "mid");
+    const posPreset = MODE_PRESETS_FX[posMode];
+    const bars = await fetchBarsYahoo(pos.ticker, "5d", "1d");
+    if (bars.length > 0) {
+      const lastBar = bars[bars.length - 1];
+      const livePrice = await fetchLatestPrice(pos.ticker, env) || lastBar.close;
+
+      await db.prepare("UPDATE positions_fx SET current_price=?, unrealized_pnl=?, unrealized_pct=? WHERE ticker=?")
+        .bind(livePrice, +((livePrice - pos.entry_price) * pos.shares).toFixed(2),
+              +((livePrice - pos.entry_price) / pos.entry_price * 100).toFixed(2), pos.ticker).run();
+
+      const holdMs = Date.now() - new Date(pos.opened_at).getTime();
+      if (holdMs < posPreset.min_hold_hours * 60 * 60 * 1000) {
+        results.equity += livePrice * pos.shares;
+        continue;
+      }
+
+      let highest = Math.max(pos.highest, livePrice);
+      let sl = pos.stop_loss;
+      let trailingActive = pos.trailing_active;
+      if ((highest - pos.entry_price) / pos.entry_price >= posPreset.trailing_activation) {
+        trailingActive = 1;
+        const newSl = roundFxPrice(highest * (1 - posPreset.trailing_distance), pos.ticker);
+        if (newSl > sl) sl = newSl;
+      }
+      await db.prepare("UPDATE positions_fx SET highest=?, stop_loss=?, trailing_active=? WHERE ticker=?")
+        .bind(highest, sl, trailingActive, pos.ticker).run();
+
+      if (pos.auto_sl && sl > 0 && pos.take_profit > 0) {
+        if (livePrice <= sl) {
+          const trade = await closePositionFx(db, pos.ticker, livePrice, "stop_loss");
+          if (trade) results.closes.push(trade);
+          continue;
+        }
+        if (livePrice >= pos.take_profit) {
+          const trade = await closePositionFx(db, pos.ticker, livePrice, "take_profit");
+          if (trade) results.closes.push(trade);
+          continue;
+        }
+      }
+
+      results.equity += livePrice * pos.shares;
+    }
+  }
+
+  for (const [ticker, name] of Object.entries(WATCHLIST_FX)) {
+    try {
+      const bars = await fetchBarsYahoo(ticker);
+      if (bars.length < 50) continue;
+      const enriched = addIndicators(bars);
+      if (enriched.length < 2) continue;
+
+      const row = enriched[enriched.length - 1];
+      const prev = enriched[enriched.length - 2];
+      const price = +row.close.toFixed(ticker.includes("JPY") ? 2 : 5);
+
+      const prelim = generateSignal(row, prev, null, weightCache.mid, ticker, "mid", MODE_PRESETS_FX);
+      const selectedMode = await selectModeForSignalFx(db, prelim.score, ticker);
+
+      if (!selectedMode) {
+        results.scores.push({ ticker, name, price, score: prelim.score, rsi: prelim.rsi, signal: 0, reasons: prelim.reasons });
+        await db.prepare("INSERT INTO scan_log_fx (created_at,ticker,price,score,rsi,signal,reasons) VALUES (?,?,?,?,?,?,?)")
+          .bind(now, ticker, row.close, prelim.score, prelim.rsi, 0, prelim.reasons.join(", ")).run();
+        continue;
+      }
+
+      const modeWeights = await getCachedWeightsFx(selectedMode);
+      const { signal, score, rsi, atr, reasons, activeInd } = generateSignal(row, prev, null, modeWeights, ticker, selectedMode, MODE_PRESETS_FX);
+
+      results.scores.push({ ticker, name, price, score, rsi, signal, reasons, mode: selectedMode });
+      await db.prepare("INSERT INTO scan_log_fx (created_at,ticker,price,score,rsi,signal,reasons) VALUES (?,?,?,?,?,?,?)")
+        .bind(now, ticker, row.close, score, rsi, signal, `[${selectedMode}] ${reasons.join(", ")}`).run();
+
+      if (signal === 1) {
+        const pos = await openPositionFx(db, ticker, name, row.close, atr, score, activeInd, selectedMode);
+        if (pos) results.buys.push(pos);
+      }
+    } catch (e) {}
+  }
+
+  await db.prepare("DELETE FROM scan_log_fx WHERE id NOT IN (SELECT id FROM scan_log_fx ORDER BY id DESC LIMIT 500)").run();
+  try { await db.prepare("DELETE FROM cooldowns_fx WHERE expires_at < ?").bind(now).run(); } catch (e) {}
+
+  const updatedPositions = await getPositionsFx(db);
+  results.equity = await getCapitalFx(db);
+  for (const position of updatedPositions) {
+    results.equity += (position.current_price || position.entry_price) * position.shares;
+  }
+  results.positions = updatedPositions;
+  results.capital = await getCapitalFx(db);
+  results.timestamp = now;
+
+  try {
+    const prevCount = parseInt((await db.prepare("SELECT value FROM config WHERE key='scan_count_fx'").first())?.value || "0", 10);
+    const newCount = prevCount + 1;
+    await db.prepare("INSERT OR REPLACE INTO config VALUES ('scan_count_fx', ?)").bind(newCount.toString()).run();
+    results.scanNumber = newCount;
+
+    const openPnl = updatedPositions.reduce((sum, position) => sum + (((position.current_price || position.entry_price) - position.entry_price) * position.shares), 0);
+    const totalPnl = +((results.equity || 0) - initialCapital).toFixed(2);
+    const entry = {
+      n: newCount,
+      t: now,
+      equity: +(results.equity || 0).toFixed(2),
+      cash: +(results.capital || 0).toFixed(2),
+      pnl: totalPnl,
+      openPnl: +openPnl.toFixed(2),
+      scored: results.scores.length,
+      pairs: results.pairsMonitored,
+      buys: results.buys.map((buy) => buy.name),
+      closes: results.closes.map((trade) => ({ name: trade.name, pnl: trade.pnl, reason: trade.reason })),
+      pos: updatedPositions.length,
+    };
+
+    let history = [];
+    try {
+      const raw = (await db.prepare("SELECT value FROM config WHERE key='scan_activity_fx'").first())?.value;
+      if (raw) history = JSON.parse(raw);
+    } catch (e) {}
+    history.push(entry);
+    if (history.length > 288) history = history.slice(-288);
+    await db.prepare("INSERT OR REPLACE INTO config VALUES ('scan_activity_fx', ?)").bind(JSON.stringify(history)).run();
+  } catch (e) {}
+
+  return results;
 }
 
 // ─────────────────────────────────────
@@ -1450,9 +1841,182 @@ async function handleAPI(request, env) {
     return json({ success: true, slots: out });
   }
 
+  if (path === "/api/fx/status") {
+    try {
+      const capital = await getCapitalFx(db);
+      const initialCapital = await getInitialCapitalFx(db);
+      const positions = await getPositionsFx(db);
+      const closedTrades = (await db.prepare("SELECT * FROM closed_trades_fx ORDER BY id DESC").all()).results || [];
+      const recentLogs = (await db.prepare("SELECT * FROM scan_log_fx ORDER BY id DESC LIMIT 50").all()).results || [];
+
+      await Promise.all(positions.map(async (pos) => {
+        try {
+          const livePrice = await fetchLatestPrice(pos.ticker, env);
+          if (livePrice) {
+            pos.current_price = livePrice;
+            pos.unrealized_pnl = +((livePrice - pos.entry_price) * pos.shares).toFixed(2);
+            pos.unrealized_pct = +((livePrice - pos.entry_price) / pos.entry_price * 100).toFixed(2);
+            await db.prepare("UPDATE positions_fx SET current_price=?, unrealized_pnl=?, unrealized_pct=? WHERE ticker=?")
+              .bind(livePrice, pos.unrealized_pnl, pos.unrealized_pct, pos.ticker).run();
+          }
+        } catch (e) {}
+
+        try {
+          pos.live_trend = await fetchLiveTrendSeries(pos.ticker, env, pos.current_price || pos.entry_price);
+        } catch (e) {
+          pos.live_trend = [];
+        }
+      }));
+
+      let equity = capital;
+      positions.forEach((p) => { equity += (p.current_price || p.entry_price) * (p.shares || 0); });
+
+      const normalizedPositions = positions.map((p) => ({
+        ...p,
+        mode: normalizeMode(p.mode || "mid"),
+        trailing_active: !!p.trailing_active,
+        auto_sl: !!p.auto_sl,
+        brain_indicators: JSON.parse(p.brain_indicators || "[]"),
+        live_trend: Array.isArray(p.live_trend) ? p.live_trend : [],
+      }));
+      const normalizedClosedTrades = closedTrades.map((trade) => ({
+        ...trade,
+        mode: normalizeMode(trade.mode || "mid"),
+      }));
+
+      const wins = normalizedClosedTrades.filter((t) => t.pnl > 0).length;
+      const totalClosed = normalizedClosedTrades.length;
+      const modeStats = {};
+      let totalSlots = 0;
+      for (const mode of MODE_ORDER) {
+        const trainedR = await db.prepare("SELECT value FROM config WHERE key=?").bind(`trades_${mode}_fx`).first();
+        const trained = trainedR ? parseInt(trainedR.value, 10) : 0;
+        const closedInMode = normalizedClosedTrades.filter((trade) => trade.mode === mode);
+        const modeWins = closedInMode.filter((trade) => trade.pnl > 0).length;
+        const pnl = closedInMode.reduce((sum, trade) => sum + trade.pnl, 0);
+        const openInMode = normalizedPositions.filter((position) => position.mode === mode).length;
+        const slots = await getModeSlotsFx(db, mode);
+        totalSlots += slots;
+        modeStats[mode] = {
+          trained,
+          trades: closedInMode.length,
+          wins: modeWins,
+          wr: closedInMode.length ? +(modeWins / closedInMode.length * 100).toFixed(1) : 0,
+          pnl: +pnl.toFixed(2),
+          open: openInMode,
+          slots,
+          weights: await getWeightsFx(db, mode),
+          preset: MODE_PRESETS_FX[mode],
+        };
+      }
+
+      return json({
+        capital: +(capital || 0).toFixed(2),
+        equity: +(equity || 0).toFixed(2),
+        pnl: +((equity || 0) - initialCapital).toFixed(2),
+        dataSource: "Yahoo Finance",
+        pairsMonitored: Object.keys(WATCHLIST_FX).length,
+        positions: normalizedPositions,
+        closedTrades: normalizedClosedTrades,
+        modes: modeStats,
+        brain: modeStats.mid ? { weights: modeStats.mid.weights, totalTrained: modeStats.mid.trained, confidence: Math.min(modeStats.mid.trained, 100) } : undefined,
+        stats: { total: totalClosed, wins, wr: totalClosed > 0 ? +(wins / totalClosed * 100).toFixed(1) : 0 },
+        recentScores: recentLogs,
+        maxPositions: totalSlots,
+        lastScanAt: recentLogs.length ? recentLogs[0].created_at : null,
+        totalScans: parseInt((await db.prepare("SELECT value FROM config WHERE key='scan_count_fx'").first())?.value || "0", 10),
+        scanActivity: JSON.parse((await db.prepare("SELECT value FROM config WHERE key='scan_activity_fx'").first())?.value || "[]"),
+      });
+    } catch (e) {
+      return json({ error: e.message, stack: e.stack }, 500);
+    }
+  }
+
+  if (path === "/api/fx/scan") {
+    try {
+      const result = await scanFx(db, env);
+      return json(result);
+    } catch (e) {
+      return json({ error: e.message, stack: e.stack }, 500);
+    }
+  }
+
+  if (path === "/api/fx/close" && request.method === "POST") {
+    const { ticker, price } = await request.json();
+    if (!ticker) return json({ error: "ticker required" }, 400);
+    const pos = await db.prepare("SELECT * FROM positions_fx WHERE ticker=?").bind(ticker).first();
+    const closePrice = price || pos?.current_price || pos?.entry_price;
+    const trade = await closePositionFx(db, ticker, closePrice, "manual_close");
+    return json(trade || { error: "Position not found" });
+  }
+
+  if (path === "/api/fx/close-all" && request.method === "POST") {
+    const positions = await getPositionsFx(db);
+    const results = [];
+    for (const position of positions) {
+      const trade = await closePositionFx(db, position.ticker, position.current_price || position.entry_price, "manual_close");
+      if (trade) results.push(trade);
+    }
+    return json({ closed: results });
+  }
+
+  if (path === "/api/fx/reset" && request.method === "POST") {
+    const initialCapital = await getInitialCapitalFx(db);
+    await db.prepare("DELETE FROM positions_fx").run();
+    await db.prepare("DELETE FROM closed_trades_fx").run();
+    await db.prepare("DELETE FROM scan_log_fx").run();
+    await db.prepare("DELETE FROM brain_history_fx").run();
+    try { await db.prepare("DELETE FROM cooldowns_fx").run(); } catch (e) {}
+    for (const mode of MODE_ORDER) {
+      await db.prepare(`UPDATE brain_${mode}_fx SET weight = default_weight`).run();
+      await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind(`trades_${mode}_fx`, "0").run();
+    }
+    await setCapitalFx(db, initialCapital);
+    await db.prepare("INSERT OR REPLACE INTO config VALUES ('scan_count_fx', '0')").run();
+    await db.prepare("INSERT OR REPLACE INTO config VALUES ('scan_activity_fx', '[]')").run();
+    return json({ success: true, capital: initialCapital });
+  }
+
+  if (path === "/api/fx/settings" && request.method === "GET") {
+    const settings = await getSettings(db);
+    return json({ settings, meta: CONFIG_META });
+  }
+
+  if (path === "/api/fx/settings" && request.method === "POST") {
+    const body = await request.json();
+    const updated = [];
+    for (const [key, value] of Object.entries(body)) {
+      if (await saveSetting(db, key, value)) updated.push(key);
+    }
+    const settings = await getSettings(db);
+    return json({ success: true, updated, settings });
+  }
+
+  if (path === "/api/fx/mode-slots" && request.method === "GET") {
+    const out = {};
+    for (const mode of MODE_ORDER) out[mode] = await getModeSlotsFx(db, mode);
+    return json(out);
+  }
+
+  if (path === "/api/fx/mode-slots" && request.method === "POST") {
+    const body = await request.json();
+    const out = {};
+    for (const mode of MODE_ORDER) {
+      if (typeof body[mode] === "number") out[mode] = await setModeSlotsFx(db, mode, body[mode]);
+      else out[mode] = await getModeSlotsFx(db, mode);
+    }
+    return json({ success: true, slots: out });
+  }
+
   // GET / — dashboard HTML
   if (path === "/") {
     return cors(new Response(DASHBOARD_HTML, {
+      headers: { "Content-Type": "text/html" },
+    }));
+  }
+
+  if (path === "/forex") {
+    return cors(new Response(DASHBOARD_FX_HTML, {
       headers: { "Content-Type": "text/html" },
     }));
   }
@@ -1660,6 +2224,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
 .asset-marker.us{background:var(--blue);box-shadow:0 0 0 4px rgba(136,184,255,.12)}
 .asset-marker.eu{background:var(--accent2);box-shadow:0 0 0 4px rgba(207,223,255,.12)}
 .asset-marker.crypto{background:var(--orange);box-shadow:0 0 0 4px rgba(255,153,96,.12)}
+.asset-marker.fx{background:#84cc16;box-shadow:0 0 0 4px rgba(132,204,22,.12)}
 .asset-main{display:flex;flex-direction:column;gap:3px}
 .asset-ticker{font-weight:700;color:var(--text)}
 .asset-kind{font-size:.66rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700}
@@ -1812,6 +2377,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
     <div class="top-right">
       <span class="source"><span class="dot" id="srcDot">●</span> <span id="srcName">...</span></span>
       <span class="pill pill-closed" id="mktPill">CHIUSO</span>
+      <a href="/forex" class="pill" style="background:rgba(132,204,22,.15);color:#84cc16;border:1px solid rgba(132,204,22,.3);text-decoration:none">Forex →</a>
       <span class="scan-status"><span class="scan-dot" id="scanDot"></span><span id="scanLabel">Auto scan ogni 5 min</span></span>
       <span id="cycleLabel"></span>
     </div>
@@ -1865,7 +2431,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
         <div class="stat-value" id="vPnl">€0.00</div>
       </div>
       <div class="stat stat-spy">
-        <div class="stat-label">SPY <span class="info-i" data-tip="S&P 500 — salute del mercato USA\\nSopra EMA50 = BULL (BUY permessi)\\nSotto EMA50 = BEAR (solo Mean Reversion)">ⓘ</span></div>
+        <div class="stat-label"><span id="marketStatLabel">SPY</span> <span class="info-i" id="marketStatTip" data-tip="S&P 500 — salute del mercato USA\\nSopra EMA50 = BULL (BUY permessi)\\nSotto EMA50 = BEAR (solo Mean Reversion)">ⓘ</span></div>
         <div class="stat-value" id="vSpy">—</div>
         <div class="stat-sub" id="vSpyStatus"></div>
       </div>
@@ -2095,6 +2661,8 @@ tr:hover td{background:rgba(255,255,255,.03)}
 
 <script>
 const API=window.location.origin+"/api";
+const CHART_API=window.location.origin+"/api/chart";
+const IS_FX=false;
 const PAGE_META={
   overview:{kicker:"Workspace",title:"Panoramica operativa",desc:"Capitale, regime di mercato, performance e stato generale del motore raccolti in una vista introduttiva."},
   positions:{kicker:"Portfolio",title:"Posizioni aperte",desc:"Vista dedicata alle posizioni in corso con P&L, livelli operativi e trend live compatti."},
@@ -2110,6 +2678,18 @@ function renderIcons(){
 
 function refreshIcons(){
   renderIcons();
+}
+
+function applyDashboardModeUI(){
+  const marketLabel=document.getElementById("marketStatLabel");
+  const marketTip=document.getElementById("marketStatTip");
+  const pill=document.getElementById("mktPill");
+  if(marketLabel) marketLabel.textContent=IS_FX?"Pairs":"SPY";
+  if(marketTip) marketTip.setAttribute("data-tip",IS_FX?"Numero di coppie forex monitorate dal bot":"S&P 500 — salute del mercato USA\nSopra EMA50 = BULL (BUY permessi)\nSotto EMA50 = BEAR (solo Mean Reversion)");
+  if(IS_FX&&pill){
+    pill.textContent=" FOREX ";
+    pill.className="pill pill-open";
+  }
 }
 
 function normalizePage(page){
@@ -2194,6 +2774,19 @@ function fmtTrendPrice(v){
   return v.toFixed(2);
 }
 
+function fmtFxPrice(price,ticker){
+  const value=Number(price||0);
+  return value.toFixed(ticker&&ticker.includes("JPY")?2:4);
+}
+
+function fmtAssetPrice(price,ticker){
+  return IS_FX?fmtFxPrice(price,ticker):"$"+fmtTrendPrice(price);
+}
+
+function fmtUnitsLabel(value){
+  return String(value)+(IS_FX?" units":"sh");
+}
+
 function timeAgo(date){
   const mins=Math.max(0,Math.floor((Date.now()-date.getTime())/60000));
   if(mins<1) return "Aggiornato ora";
@@ -2205,6 +2798,7 @@ function timeAgo(date){
 }
 
 function getTickerMarket(ticker){
+  if(IS_FX&&(ticker||"").endsWith("=X")) return "fx";
   if((ticker||"").includes("-USD")) return "crypto";
   if(/\.(MI|DE|PA|AS|L|MC)$/.test(ticker||"")) return "eu";
   return "us";
@@ -2421,12 +3015,18 @@ let chartInstance=null;
 let candleSeries=null;
 let chartContext=null;
 
-function getChartPricePrecision(price){
+function getChartPricePrecision(price,ticker=""){
+  if(IS_FX) return ticker.includes("JPY")?2:4;
   const priceMagnitude=Math.abs(price||0);
   if(priceMagnitude<0.0001) return 8;
   if(priceMagnitude<0.01) return 6;
   if(priceMagnitude<1) return 4;
   return 2;
+}
+
+function fmtChartPrice(price,ticker=""){
+  const precision=getChartPricePrecision(price,ticker);
+  return (IS_FX?"":"$")+Number(price||0).toFixed(precision);
 }
 
 function findNearestCandleTime(candles,targetTime){
@@ -2448,11 +3048,10 @@ function openChart(ctx){
   document.getElementById("chartModal").style.display="flex";
   document.getElementById("chartTitle").textContent=(ctx.name||ctx.ticker)+" — "+ctx.ticker;
 
-  const precision=getChartPricePrecision(ctx.entry||ctx.exit||0);
   const info=document.getElementById("chartInfo");
   const parts=[];
-  if(Number.isFinite(ctx.entry)) parts.push("Entry: $"+ctx.entry.toFixed(precision));
-  if(ctx.exit!=null) parts.push("Exit: $"+ctx.exit.toFixed(precision));
+  if(Number.isFinite(ctx.entry)) parts.push("Entry: "+fmtChartPrice(ctx.entry,ctx.ticker));
+  if(ctx.exit!=null) parts.push("Exit: "+fmtChartPrice(ctx.exit,ctx.ticker));
   if(ctx.pnl!=null) parts.push("P&L: "+(ctx.pnl>=0?"+":"")+"€"+ctx.pnl.toFixed(2));
   if(ctx.mode) parts.push("Mode: "+ctx.mode);
   info.innerHTML=parts.join(" • ");
@@ -2516,7 +3115,7 @@ async function loadChart(){
       return;
     }
 
-    const res=await fetch(API+"/chart?ticker="+encodeURIComponent(chartContext.ticker)+"&interval="+interval+"&range="+range);
+    const res=await fetch(CHART_API+"?ticker="+encodeURIComponent(chartContext.ticker)+"&interval="+interval+"&range="+range);
     const data=await res.json();
     if(!chartContext||chartContext!==activeContext) return;
 
@@ -2529,7 +3128,7 @@ async function loadChart(){
       return;
     }
 
-    const precision=getChartPricePrecision(chartContext.entry);
+    const precision=getChartPricePrecision(chartContext.entry,chartContext.ticker);
     chartInstance=LightweightCharts.createChart(container,{
       width:container.clientWidth,
       height:420,
@@ -2561,7 +3160,7 @@ async function loadChart(){
         position:"belowBar",
         color:"#3b82f6",
         shape:"arrowUp",
-        text:"Entry $"+chartContext.entry.toFixed(precision),
+        text:"Entry "+fmtChartPrice(chartContext.entry,chartContext.ticker),
       });
     }
     if(chartContext.exitTime&&chartContext.exit!=null){
@@ -2574,7 +3173,7 @@ async function loadChart(){
           position:"aboveBar",
           color:exitColor,
           shape:"arrowDown",
-          text:"Exit $"+chartContext.exit.toFixed(precision),
+          text:"Exit "+fmtChartPrice(chartContext.exit,chartContext.ticker),
         });
       }
     }
@@ -2700,10 +3299,10 @@ async function load(){
         const trendReady=trendSeries.length>=2;
         return '<div class="pos-wrap"><div class="pos-card '+(up?"pos-up":"pos-down")+'">'
           +'<button class="pos-expand" onclick="togglePos('+i+')" id="posExp'+i+'">▼</button>'
-          +'<div class="pos-main"><div class="pos-name">'+p.name+modeBadge+trail+'</div><div class="pos-detail mono">'+sh+'sh &middot; $'+fmtTrendPrice(p.entry_price)+' &rarr; $'+fmtTrendPrice(cur)+'</div></div>'
+          +'<div class="pos-main"><div class="pos-name">'+p.name+modeBadge+trail+'</div><div class="pos-detail mono">'+fmtUnitsLabel(sh)+' &middot; '+fmtAssetPrice(p.entry_price,p.ticker)+' &rarr; '+fmtAssetPrice(cur,p.ticker)+'</div></div>'
           +'<div class="pos-trend"><div class="pos-trend-head"><span class="pos-trend-label">Trend live</span><span class="pos-trend-value '+(trendReady?(trendPct>=0?"g":"r"):'')+'">'+(trendReady?((trendPct>=0?"+":"")+trendPct.toFixed(2)+"%"):'No feed')+'</span></div><div class="pos-trend-chart"><canvas id="posTrend'+i+'"></canvas><div class="pos-trend-empty'+(trendReady?' hidden':'')+'" id="posTrendEmpty'+i+'">Trend live in attesa</div></div></div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
-          +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
+          +'<div class="pos-levels"><span class="r">SL '+fmtAssetPrice(p.stop_loss,p.ticker)+'</span> &middot; <span class="g">TP '+fmtAssetPrice(p.take_profit,p.ticker)+'</span></div>'
           +'<button class="pos-close pos-chart" onclick="showPosChart('+i+')"><i data-lucide="line-chart" class="lc-sm"></i> Grafico</button>'
           +'<button class="pos-close" onclick="closeTicker(\\\''+p.ticker+'\\\')"><i data-lucide="x" class="lc-sm"></i> Chiudi</button></div>'
           +'<div class="pos-extra" id="posExtra'+i+'">'
@@ -2739,12 +3338,12 @@ async function load(){
         else if(s.score<=-0.5){badge="RISK";cls="b-down";}
         else{badge="HOLD";cls="b-hold";}
         const market=getTickerMarket(s.ticker);
-        const marketLabel=market==="crypto"?"CRYPTO":(market==="eu"?"EU":"USA");
+        const marketLabel=market==="crypto"?"CRYPTO":(market==="eu"?"EU":(market==="fx"?"FX":"USA"));
         const rsiCls=s.rsi<35?"g":(s.rsi>65?"r":"");
         const scCls=s.score>=0.8?"g":(s.score>=0.5?"y":(s.score<=-0.8?"r":""));
         const dotCls=s.signal===1?"g":(s.signal===-1?"r":(s.score>=0.5?"y":""));
         return '<tr><td><div class="asset-cell"><span class="asset-marker '+market+'"></span><div class="asset-main"><span class="asset-ticker">'+s.ticker+'</span><span class="asset-kind">'+marketLabel+'</span></div></div></td>'
-          +'<td style="text-align:right" class="mono">$'+s.price.toFixed(2)+'</td>'
+          +'<td style="text-align:right" class="mono">'+fmtAssetPrice(s.price,s.ticker)+'</td>'
           +'<td style="text-align:right" class="mono '+scCls+'">'+s.score.toFixed(1)+'</td>'
           +'<td style="text-align:right;font-weight:700" class="'+rsiCls+'">'+s.rsi.toFixed(0)+'</td>'
           +'<td style="text-align:center"><span class="badge '+cls+'">'+badge+'</span></td></tr>';
@@ -2773,8 +3372,8 @@ async function load(){
         const modeBadge=renderModeBadge(t.mode);
         return '<tr style="cursor:pointer" onclick="showTradeChart('+i+')" title="Clicca per grafico"><td class="mono" style="font-size:.8rem">'+dt+'</td>'
           +'<td>'+t.name+'</td>'
-          +'<td style="text-align:right" class="mono">$'+(t.entry_price||0).toFixed(2)+'</td>'
-          +'<td style="text-align:right" class="mono">$'+(t.exit_price||0).toFixed(2)+'</td>'
+          +'<td style="text-align:right" class="mono">'+fmtAssetPrice((t.entry_price||0),t.ticker)+'</td>'
+          +'<td style="text-align:right" class="mono">'+fmtAssetPrice((t.exit_price||0),t.ticker)+'</td>'
           +'<td style="text-align:right">'+t.shares+'</td>'
           +'<td style="text-align:right;font-weight:700" class="'+(w?"g":"r")+'">'+(w?"+":"")+"€"+t.pnl.toFixed(2)+'</td>'
           +'<td style="text-align:right" class="'+(w?"g":"r")+'">'+(t.pnl_pct>=0?"+":"")+t.pnl_pct.toFixed(1)+'%</td>'
@@ -2829,7 +3428,8 @@ async function load(){
         // First load: show last 5 for context
         d.scanActivity.slice(-5).forEach(a=>{
           const dt=new Date(a.t).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
-          let msg="Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" posizioni, SPY: "+a.spy;
+          const marketContext=IS_FX?((a.pairs??d.pairsMonitored??"?")+" pairs"):("SPY: "+(a.spy??"?"));
+          let msg="Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" posizioni, "+marketContext;
           if(a.buys.length) msg+=" | BUY: "+a.buys.join(", ");
           if(a.closes.length) a.closes.forEach(c=>{ msg+=" | CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
           addLog(msg,a.buys.length?"buy":(a.closes.length?"sell":""));
@@ -2838,7 +3438,8 @@ async function load(){
         // Subsequent loads (every 30s): only new scans
         newEntries.forEach(a=>{
           const dt=new Date(a.t).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
-          let msg="Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" posizioni, SPY: "+a.spy;
+          const marketContext=IS_FX?((a.pairs??d.pairsMonitored??"?")+" pairs"):("SPY: "+(a.spy??"?"));
+          let msg="Auto #"+a.n+" ["+dt+"] — "+a.scored+" asset, "+a.pos+" posizioni, "+marketContext;
           if(a.buys.length) msg+=" | BUY: "+a.buys.join(", ");
           if(a.closes.length) a.closes.forEach(c=>{ msg+=" | CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]"; });
           addLog(msg,a.buys.length?"buy":(a.closes.length?"sell":""));
@@ -2847,19 +3448,7 @@ async function load(){
       lastSeenScan=d.scanActivity[d.scanActivity.length-1].n;
     }
 
-    // SPY banner on load
-    if(d.spyStatus){
-      document.getElementById("vSpy").textContent="$"+d.spyStatus.price.toFixed(2);
-      document.getElementById("vSpy").className="stat-value "+(d.spyStatus.bullish?"g":"r");
-      document.getElementById("vSpyStatus").textContent=d.spyStatus.bullish?"Bullish":"Bearish";
-      document.getElementById("vSpyStatus").className="stat-sub "+(d.spyStatus.bullish?"g":"r");
-      const bb=document.getElementById("bearBanner");
-      if(!d.spyStatus.bullish){bb.classList.add("show");}else{bb.classList.remove("show");}
-      const pill=document.getElementById("mktPill");
-      const h=new Date().getUTCHours();const isOpen=h>=13&&h<21;
-      pill.textContent=isOpen?" APERTO ":" CHIUSO ";
-      pill.className="pill "+(isOpen?"pill-open":"pill-closed");
-    }
+    updateMarketStat(d);
 
     updatePageHeader();
     refreshIcons();
@@ -2896,29 +3485,49 @@ async function doScan(){
     const d=await r.json();
     if(d.error){addLog("Scan error: "+d.error,"sell");setButtonLabel("scanBtn","Esegui scan",false);return;}
     document.getElementById("cycleLabel").textContent="Ciclo "+(d.scanNumber||d.totalScans||0);
-    if(d.buys?.length) d.buys.forEach(b=>addLog("BUY "+b.name+": "+b.shares+"sh @ $"+b.entry_price.toFixed(2),"buy"));
+    if(d.buys?.length) d.buys.forEach(b=>addLog("BUY "+b.name+": "+fmtUnitsLabel(b.shares)+" @ "+fmtAssetPrice(b.entry_price,b.ticker),"buy"));
     if(d.closes?.length) d.closes.forEach(c=>addLog("CLOSE "+c.name+": "+(c.pnl>=0?"+":"")+"€"+c.pnl.toFixed(2)+" ["+c.reason+"]",c.pnl>=0?"buy":"sell"));
     if(d.scores?.length) addLog("Scan completata: "+d.scores.length+" asset, "+d.positions?.length+" posizioni","");
     if(d.spyStatus) addLog("Regime SPY: "+(d.spyStatus.bullish?"bullish":"bearish")+" @ $"+d.spyStatus.price,d.spyStatus.bullish?"buy":"sell");
 
-    // Update SPY card
-    if(d.spyStatus){
-      document.getElementById("vSpy").textContent="$"+d.spyStatus.price;
-      document.getElementById("vSpy").className="stat-value "+(d.spyStatus.bullish?"g":"r");
-      document.getElementById("vSpyStatus").textContent=d.spyStatus.bullish?"Bullish":"Bearish";
-      document.getElementById("vSpyStatus").className="stat-sub "+(d.spyStatus.bullish?"g":"r");
-      // Show/hide bearish banner
-      const bb=document.getElementById("bearBanner");
-      if(!d.spyStatus.bullish){bb.classList.add("show");}else{bb.classList.remove("show");}
-      const pill=document.getElementById("mktPill");
-      // Rough market hours check (14:30-21:00 CET)
-      const h=new Date().getUTCHours();const isOpen=h>=13&&h<21;
-      pill.textContent=isOpen?" APERTO ":" CHIUSO ";
-      pill.className="pill "+(isOpen?"pill-open":"pill-closed");
-    }
+    updateMarketStat(d);
     load();
   }catch(e){addLog("Errore: "+e.message,"sell");}
   setButtonLabel("scanBtn","Esegui scan",false);
+}
+
+function updateMarketStat(d){
+  const valueEl=document.getElementById("vSpy");
+  const subEl=document.getElementById("vSpyStatus");
+  const pill=document.getElementById("mktPill");
+  const banner=document.getElementById("bearBanner");
+  if(!valueEl||!subEl||!pill) return;
+
+  if(Number.isFinite(d?.pairsMonitored)){
+    valueEl.textContent=String(d.pairsMonitored);
+    valueEl.className="stat-value c";
+    subEl.textContent="Coppie monitorate";
+    subEl.className="stat-sub";
+    if(banner) banner.classList.remove("show");
+    pill.textContent=" FOREX ";
+    pill.className="pill pill-open";
+    return;
+  }
+
+  if(d?.spyStatus){
+    valueEl.textContent="$"+Number(d.spyStatus.price||0).toFixed(2);
+    valueEl.className="stat-value "+(d.spyStatus.bullish?"g":"r");
+    subEl.textContent=d.spyStatus.bullish?"Bullish":"Bearish";
+    subEl.className="stat-sub "+(d.spyStatus.bullish?"g":"r");
+    if(banner){
+      if(!d.spyStatus.bullish) banner.classList.add("show");
+      else banner.classList.remove("show");
+    }
+    const h=new Date().getUTCHours();
+    const isOpen=h>=13&&h<21;
+    pill.textContent=isOpen?" APERTO ":" CHIUSO ";
+    pill.className="pill "+(isOpen?"pill-open":"pill-closed");
+  }
 }
 
 async function closeTicker(t){
@@ -3129,12 +3738,29 @@ async function resetSettings(){
 }
 
 // Init
+applyDashboardModeUI();
 setActivePage(getPageFromHash(),false);
 load();
 setInterval(load,30000);
 renderIcons();
 addLog("Dashboard caricata","");
 </script></body></html>`;
+
+function buildForexDashboardHtml() {
+  return DASHBOARD_HTML
+    .replace("<title>Tradebot — Premium Command Deck</title>", "<title>Tradebot FX — Premium Command Deck</title>")
+    .replace("<span class=\"logo-text\">TRADEBOT</span>", "<span class=\"logo-text\">TRADEBOT FX</span>")
+    .replace("<span class=\"logo-sub\">Premium command deck</span>", "<span class=\"logo-sub\">Forex command deck</span>")
+    .replace("<a href=\"/forex\" class=\"pill\" style=\"background:rgba(132,204,22,.15);color:#84cc16;border:1px solid rgba(132,204,22,.3);text-decoration:none\">Forex →</a>", "<a href=\"/\" class=\"pill\" style=\"background:rgba(139,92,246,.15);color:#8b5cf6;border:1px solid rgba(139,92,246,.3);text-decoration:none\">← Stocks</a>")
+    .replace("const API=window.location.origin+\"/api\";\nconst CHART_API=window.location.origin+\"/api/chart\";\nconst IS_FX=false;", "const API=window.location.origin+\"/api/fx\";\nconst CHART_API=window.location.origin+\"/api/chart\";\nconst IS_FX=true;")
+    .replace("<span class=\"hero-chip\">US + EU + Crypto</span>", "<span class=\"hero-chip\">10 major FX pairs</span>")
+    .replace("<span class=\"hero-chip\">Auto scan ogni 5 min</span>", "<span class=\"hero-chip\">Forex scan ogni 5 min</span>")
+    .replace("<span class=\"hero-chip\">Brain learning attivo</span>", "<span class=\"hero-chip\">Brain FX attivo</span>")
+    .replace("<div class=\"hero-note\">Motore invariato, linguaggio visivo più vicino a un command center finanziario premium.</div>", "<div class=\"hero-note\">Budget, brain e posizioni sono separati dal bot stocks. Questa plancia monitora solo le principali coppie forex.</div>")
+    .replace("</style>", "body{background:radial-gradient(circle at 14% -8%,rgba(132,204,22,.18),transparent 28%),radial-gradient(circle at 84% 0%,rgba(190,242,100,.10),transparent 24%),linear-gradient(180deg,#050608 0%,#0b1016 40%,#06080d 100%)}\n.logo-mark{background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(132,204,22,.12))!important}\n.logo-dot{background:radial-gradient(circle at 30% 30%,#fff,#e8f8c8 40%,#84cc16 100%)!important;box-shadow:0 0 18px rgba(132,204,22,.45)!important}\n.hero-strip{background:linear-gradient(135deg,rgba(255,255,255,.06),rgba(132,204,22,.08) 42%,rgba(190,242,100,.04))!important}\n</style>");
+}
+
+const DASHBOARD_FX_HTML = buildForexDashboardHtml();
 
 // ─────────────────────────────────────
 // WORKER ENTRY POINT
@@ -3148,5 +3774,6 @@ export default {
   // Cron trigger → scan every 5 min
   async scheduled(event, env) {
     await scan(env.DB, env);
+    await scanFx(env.DB, env);
   },
 };
