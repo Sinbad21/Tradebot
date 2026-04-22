@@ -2793,7 +2793,7 @@ function applyDashboardModeUI(){
   const marketTip=document.getElementById("marketStatTip");
   const pill=document.getElementById("mktPill");
   if(marketLabel) marketLabel.textContent=IS_FX?"Pairs":"SPY";
-  if(marketTip) marketTip.setAttribute("data-tip",IS_FX?"Numero di coppie forex monitorate dal bot":"S&P 500 — salute del mercato USA\nSopra EMA50 = BULL (BUY permessi)\nSotto EMA50 = BEAR (solo Mean Reversion)");
+  if(marketTip) marketTip.setAttribute("data-tip",IS_FX?"Numero di coppie forex monitorate dal bot":"S&P 500 — salute del mercato USA\\nSopra EMA50 = BULL (BUY permessi)\\nSotto EMA50 = BEAR (solo Mean Reversion)");
   if(IS_FX&&pill){
     pill.textContent=" FOREX ";
     pill.className="pill pill-open";
