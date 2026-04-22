@@ -2371,6 +2371,7 @@ async function load(){
         const pl=((cur-p.entry_price)*p.shares);
         const pct=((cur-p.entry_price)/p.entry_price*100);
         const up=pl>=0;
+        const modeBadge=renderModeBadge(p.mode);
         const trail=p.trailing_active?'<span class="trail-pill">Trailing</span>':"";
         const sh=p.shares%1===0?p.shares:p.shares.toFixed(4);
         const curVal=(cur*p.shares);
@@ -2382,7 +2383,7 @@ async function load(){
         const trendReady=trendSeries.length>=2;
         return '<div class="pos-wrap"><div class="pos-card '+(up?"pos-up":"pos-down")+'">'
           +'<button class="pos-expand" onclick="togglePos('+i+')" id="posExp'+i+'">▼</button>'
-          +'<div class="pos-main"><div class="pos-name">'+p.name+trail+'</div><div class="pos-detail mono">'+sh+'sh &middot; $'+fmtTrendPrice(p.entry_price)+' &rarr; $'+fmtTrendPrice(cur)+'</div></div>'
+          +'<div class="pos-main"><div class="pos-name">'+p.name+modeBadge+trail+'</div><div class="pos-detail mono">'+sh+'sh &middot; $'+fmtTrendPrice(p.entry_price)+' &rarr; $'+fmtTrendPrice(cur)+'</div></div>'
           +'<div class="pos-trend"><div class="pos-trend-head"><span class="pos-trend-label">Trend live</span><span class="pos-trend-value '+(trendReady?(trendPct>=0?"g":"r"):'')+'">'+(trendReady?((trendPct>=0?"+":"")+trendPct.toFixed(2)+"%"):'No feed')+'</span></div><div class="pos-trend-chart"><canvas id="posTrend'+i+'"></canvas><div class="pos-trend-empty'+(trendReady?' hidden':'')+'" id="posTrendEmpty'+i+'">Trend live in attesa</div></div></div>'
           +'<div class="pos-pnl '+(up?"g":"r")+'">'+(up?"+":"")+"€"+pl.toFixed(2)+' ('+(pct>=0?"+":"")+pct.toFixed(1)+'%)</div>'
           +'<div class="pos-levels"><span class="r">SL $'+p.stop_loss.toFixed(0)+'</span> &middot; <span class="g">TP $'+p.take_profit.toFixed(0)+'</span></div>'
