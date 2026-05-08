@@ -893,6 +893,34 @@ async function setCapitalFx(db, val) {
   await db.prepare("INSERT OR REPLACE INTO config VALUES ('capital_fx', ?)").bind(val.toFixed(2)).run();
 }
 
+async function processMonthlyDeposits(env) {
+  const db = env.DB;
+  const enabled = await db.prepare("SELECT value FROM config WHERE key='monthly_deposit_enabled'").first();
+  if (!enabled || enabled.value !== "1") return;
+
+  const now = new Date();
+  const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  for (const bot of ["stocks", "fx"]) {
+    const exists = await db.prepare("SELECT id FROM deposits WHERE bot=? AND year_month=? LIMIT 1").bind(bot, yearMonth).first();
+    if (exists) continue;
+
+    const cfgKey = bot === "stocks" ? "monthly_deposit_stocks" : "monthly_deposit_fx";
+    const amountRow = await db.prepare("SELECT value FROM config WHERE key=?").bind(cfgKey).first();
+    const fallback = bot === "stocks" ? 500 : 200;
+    const amount = amountRow ? parseFloat(amountRow.value) : fallback;
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+
+    const currentCapital = bot === "stocks" ? await getCapital(db) : await getCapitalFx(db);
+    const newCapital = currentCapital + amount;
+    if (bot === "stocks") await setCapital(db, newCapital);
+    else await setCapitalFx(db, newCapital);
+
+    await db.prepare("INSERT INTO deposits (bot, amount, year_month, created_at, note) VALUES (?,?,?,?,?)")
+      .bind(bot, amount, yearMonth, now.toISOString(), "PAC automatico " + yearMonth).run();
+  }
+}
+
 async function getPositions(db) {
   return (await db.prepare("SELECT * FROM positions").all()).results || [];
 }
@@ -1870,6 +1898,7 @@ async function handleAPI(request, env) {
   // GET /api/scan — trigger scan
   if (path === "/api/scan") {
     try {
+      await processMonthlyDeposits(env);
       const result = await scan(db, env);
       return json(result);
     } catch (e) {
@@ -2042,6 +2071,7 @@ async function handleAPI(request, env) {
 
   if (path === "/api/fx/scan") {
     try {
+      await processMonthlyDeposits(env);
       const result = await scanFx(db, env);
       return json(result);
     } catch (e) {
@@ -2114,6 +2144,260 @@ async function handleAPI(request, env) {
       else out[mode] = await getModeSlotsFx(db, mode);
     }
     return json({ success: true, slots: out });
+  }
+
+  if ((path === "/api/deposits" || path === "/api/fx/deposits") && request.method === "GET") {
+    const rows = (await db.prepare("SELECT * FROM deposits ORDER BY id DESC LIMIT 100").all()).results || [];
+    const totals = (await db.prepare("SELECT bot, COUNT(*) as count, ROUND(SUM(amount), 2) as total FROM deposits GROUP BY bot").all()).results || [];
+    return json({ deposits: rows, totals });
+  }
+
+  if ((path === "/api/deposits/config" || path === "/api/fx/deposits/config") && request.method === "GET") {
+    const stocksRow = await db.prepare("SELECT value FROM config WHERE key='monthly_deposit_stocks'").first();
+    const fxRow = await db.prepare("SELECT value FROM config WHERE key='monthly_deposit_fx'").first();
+    const enabledRow = await db.prepare("SELECT value FROM config WHERE key='monthly_deposit_enabled'").first();
+    return json({
+      stocks: stocksRow ? parseFloat(stocksRow.value) : 500,
+      fx: fxRow ? parseFloat(fxRow.value) : 200,
+      enabled: enabledRow ? enabledRow.value === "1" : true,
+    });
+  }
+
+  if ((path === "/api/deposits/config" || path === "/api/fx/deposits/config") && request.method === "POST") {
+    const body = await request.json();
+    if (typeof body.stocks === "number" && Number.isFinite(body.stocks) && body.stocks >= 0) {
+      await db.prepare("INSERT OR REPLACE INTO config VALUES ('monthly_deposit_stocks', ?)").bind(body.stocks.toString()).run();
+    }
+    if (typeof body.fx === "number" && Number.isFinite(body.fx) && body.fx >= 0) {
+      await db.prepare("INSERT OR REPLACE INTO config VALUES ('monthly_deposit_fx', ?)").bind(body.fx.toString()).run();
+    }
+    if (typeof body.enabled === "boolean") {
+      await db.prepare("INSERT OR REPLACE INTO config VALUES ('monthly_deposit_enabled', ?)").bind(body.enabled ? "1" : "0").run();
+    }
+    return json({ success: true });
+  }
+
+  if ((path === "/api/deposits/manual" || path === "/api/fx/deposits/manual") && request.method === "POST") {
+    const body = await request.json();
+    if (!["stocks", "fx"].includes(body.bot)) return json({ error: "invalid bot" }, 400);
+
+    const amount = parseFloat(body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return json({ error: "invalid amount" }, 400);
+
+    const now = new Date();
+    const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const currentCapital = body.bot === "stocks" ? await getCapital(db) : await getCapitalFx(db);
+    const newCapital = currentCapital + amount;
+    if (body.bot === "stocks") await setCapital(db, newCapital);
+    else await setCapitalFx(db, newCapital);
+
+    await db.prepare("INSERT INTO deposits (bot, amount, year_month, created_at, note) VALUES (?,?,?,?,?)")
+      .bind(body.bot, amount, yearMonth, now.toISOString(), body.note || "Manuale").run();
+
+    return json({ success: true, newCapital: +newCapital.toFixed(2) });
+  }
+
+  if ((path === "/api/deposits/delete" || path === "/api/fx/deposits/delete") && request.method === "POST") {
+    const body = await request.json();
+    const depositId = parseInt(body.id, 10);
+    if (!Number.isFinite(depositId)) return json({ error: "invalid id" }, 400);
+
+    const deposit = await db.prepare("SELECT * FROM deposits WHERE id=?").bind(depositId).first();
+    if (!deposit) return json({ error: "not found" }, 404);
+
+    const currentCapital = deposit.bot === "stocks" ? await getCapital(db) : await getCapitalFx(db);
+    const newCapital = Math.max(0, currentCapital - (Number(deposit.amount) || 0));
+    if (deposit.bot === "stocks") await setCapital(db, newCapital);
+    else await setCapitalFx(db, newCapital);
+
+    await db.prepare("DELETE FROM deposits WHERE id=?").bind(depositId).run();
+    return json({ success: true });
+  }
+
+  if (path === "/api/reports") {
+    try {
+      const monthly = (await db.prepare(`
+        SELECT
+          strftime('%Y-%m', closed_at) as month,
+          COUNT(*) as trades,
+          SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+          ROUND(SUM(pnl), 2) as pnl,
+          ROUND(AVG(pnl), 2) as avg_pnl,
+          ROUND(MAX(pnl), 2) as best,
+          ROUND(MIN(pnl), 2) as worst
+        FROM closed_trades
+        GROUP BY month
+        ORDER BY month DESC
+      `).all()).results || [];
+
+      const monthlyByMode = (await db.prepare(`
+        SELECT
+          strftime('%Y-%m', closed_at) as month,
+          mode,
+          COUNT(*) as trades,
+          SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+          ROUND(SUM(pnl), 2) as pnl
+        FROM closed_trades
+        GROUP BY month, mode
+        ORDER BY month DESC, mode
+      `).all()).results || [];
+
+      const topAssets = (await db.prepare(`
+        SELECT ticker, name, ROUND(SUM(pnl), 2) as total_pnl, COUNT(*) as trades
+        FROM closed_trades
+        GROUP BY ticker
+        ORDER BY total_pnl DESC
+        LIMIT 5
+      `).all()).results || [];
+
+      const worstAssets = (await db.prepare(`
+        SELECT ticker, name, ROUND(SUM(pnl), 2) as total_pnl, COUNT(*) as trades
+        FROM closed_trades
+        GROUP BY ticker
+        ORDER BY total_pnl ASC
+        LIMIT 3
+      `).all()).results || [];
+
+      const totalRow = await db.prepare(`
+        SELECT
+          COUNT(*) as trades,
+          SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+          ROUND(SUM(pnl), 2) as total_pnl
+        FROM closed_trades
+      `).first() || {};
+
+      const sortedAsc = [...monthly].sort((a, b) => a.month.localeCompare(b.month));
+      let cumulative = 0;
+      const equityCurve = sortedAsc.map((entry) => {
+        cumulative += Number(entry.pnl) || 0;
+        return {
+          month: entry.month,
+          cumulative_pnl: +cumulative.toFixed(2),
+          monthly_pnl: Number(entry.pnl) || 0,
+        };
+      });
+
+      const cfg = await getSettings(db);
+      const initialCapital = cfg.initial_capital;
+      const depositRow = await db.prepare("SELECT ROUND(SUM(amount), 2) as total, COUNT(*) as count FROM deposits WHERE bot=?").bind("stocks").first();
+      const totalDeposited = Number(depositRow?.total) || 0;
+      const numDeposits = Number(depositRow?.count) || 0;
+      const totalInvested = +(initialCapital + totalDeposited).toFixed(2);
+
+      return json({
+        bot: "stocks",
+        initial_capital: initialCapital,
+        monthly,
+        monthlyByMode,
+        topAssets,
+        worstAssets,
+        total: {
+          trades: totalRow.trades || 0,
+          wins: totalRow.wins || 0,
+          wr: totalRow.trades ? +(totalRow.wins / totalRow.trades * 100).toFixed(1) : 0,
+          pnl: totalRow.total_pnl || 0,
+          pnl_pct: totalInvested > 0 && totalRow.total_pnl ? +((totalRow.total_pnl / totalInvested) * 100).toFixed(2) : 0,
+        },
+        totalDeposited,
+        numDeposits,
+        totalInvested,
+        equityCurve,
+      });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
+  }
+
+  if (path === "/api/fx/reports") {
+    try {
+      const monthly = (await db.prepare(`
+        SELECT
+          strftime('%Y-%m', closed_at) as month,
+          COUNT(*) as trades,
+          SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+          ROUND(SUM(pnl), 2) as pnl,
+          ROUND(AVG(pnl), 2) as avg_pnl,
+          ROUND(MAX(pnl), 2) as best,
+          ROUND(MIN(pnl), 2) as worst
+        FROM closed_trades_fx
+        GROUP BY month
+        ORDER BY month DESC
+      `).all()).results || [];
+
+      const monthlyByMode = (await db.prepare(`
+        SELECT
+          strftime('%Y-%m', closed_at) as month,
+          mode,
+          COUNT(*) as trades,
+          SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+          ROUND(SUM(pnl), 2) as pnl
+        FROM closed_trades_fx
+        GROUP BY month, mode
+        ORDER BY month DESC, mode
+      `).all()).results || [];
+
+      const topAssets = (await db.prepare(`
+        SELECT ticker, name, ROUND(SUM(pnl), 2) as total_pnl, COUNT(*) as trades
+        FROM closed_trades_fx
+        GROUP BY ticker
+        ORDER BY total_pnl DESC
+        LIMIT 5
+      `).all()).results || [];
+
+      const worstAssets = (await db.prepare(`
+        SELECT ticker, name, ROUND(SUM(pnl), 2) as total_pnl, COUNT(*) as trades
+        FROM closed_trades_fx
+        GROUP BY ticker
+        ORDER BY total_pnl ASC
+        LIMIT 3
+      `).all()).results || [];
+
+      const totalRow = await db.prepare(`
+        SELECT
+          COUNT(*) as trades,
+          SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+          ROUND(SUM(pnl), 2) as total_pnl
+        FROM closed_trades_fx
+      `).first() || {};
+
+      const initialCapital = await getInitialCapitalFx(db);
+      const depositRow = await db.prepare("SELECT ROUND(SUM(amount), 2) as total, COUNT(*) as count FROM deposits WHERE bot=?").bind("fx").first();
+      const totalDeposited = Number(depositRow?.total) || 0;
+      const numDeposits = Number(depositRow?.count) || 0;
+      const totalInvested = +(initialCapital + totalDeposited).toFixed(2);
+      const sortedAsc = [...monthly].sort((a, b) => a.month.localeCompare(b.month));
+      let cumulative = 0;
+      const equityCurve = sortedAsc.map((entry) => {
+        cumulative += Number(entry.pnl) || 0;
+        return {
+          month: entry.month,
+          cumulative_pnl: +cumulative.toFixed(2),
+          monthly_pnl: Number(entry.pnl) || 0,
+        };
+      });
+
+      return json({
+        bot: "forex",
+        initial_capital: initialCapital,
+        monthly,
+        monthlyByMode,
+        topAssets,
+        worstAssets,
+        total: {
+          trades: totalRow.trades || 0,
+          wins: totalRow.wins || 0,
+          wr: totalRow.trades ? +(totalRow.wins / totalRow.trades * 100).toFixed(1) : 0,
+          pnl: totalRow.total_pnl || 0,
+          pnl_pct: totalInvested > 0 && totalRow.total_pnl ? +((totalRow.total_pnl / totalInvested) * 100).toFixed(2) : 0,
+        },
+        totalDeposited,
+        numDeposits,
+        totalInvested,
+        equityCurve,
+      });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
   }
 
   // GET / — dashboard HTML
@@ -2653,6 +2937,10 @@ tr:hover td{background:rgba(255,255,255,.03)}
   <hr class="sep">
   <button class="side-btn btn-settings" onclick="showSettings()"><i data-lucide="settings-2"></i><span class="btn-label">Impostazioni</span></button>
   <hr class="sep">
+  <button class="side-btn btn-action" onclick="showReports()" style="color:var(--cyan);border-color:var(--border)"><i data-lucide="bar-chart-3"></i><span class="btn-label">Reports</span></button>
+  <hr class="sep">
+  <button class="side-btn btn-action" onclick="showPAC()" style="color:var(--accent)"><i data-lucide="piggy-bank"></i><span class="btn-label">Piano Accumulo</span></button>
+  <hr class="sep">
   <button class="side-btn btn-danger" onclick="resetAll()"><i data-lucide="trash-2"></i><span class="btn-label">Reset</span></button>
   <hr class="sep">
   <button class="side-btn" onclick="location.href=\\'/api/logout\\'"><i data-lucide="log-out"></i><span class="btn-label">Logout</span></button>
@@ -2764,6 +3052,59 @@ tr:hover td{background:rgba(255,255,255,.03)}
   <div style="display:flex;gap:8px;margin-top:14px">
     <button class="side-btn btn-action" style="flex:1" onclick="hideChart()">Chiudi</button>
   </div>
+</div>
+</div>
+
+<!-- REPORTS MODAL -->
+<div class="modal-bg" id="reportsModal">
+<div class="modal" style="width:1000px;max-width:95vw">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+    <h2 style="margin:0"><i data-lucide="bar-chart-3" class="lc-lg" style="color:var(--accent);margin-right:6px"></i> Resoconti</h2>
+    <button class="side-btn btn-action" onclick="hideReports()" style="width:auto;padding:6px 12px"><i data-lucide="x" class="lc-sm"></i> Chiudi</button>
+  </div>
+  <div id="reportsContent">
+    <div style="text-align:center;color:var(--text3);padding:40px">Caricamento…</div>
+  </div>
+</div>
+</div>
+
+<!-- PAC MODAL -->
+<div class="modal-bg" id="pacModal">
+<div class="modal" style="width:600px;max-width:95vw">
+  <h2 class="modal-title"><i data-lucide="piggy-bank"></i><span>Piano di Accumulo</span></h2>
+  <p style="font-size:.85rem;color:var(--text2)">Ogni mese aggiunge automaticamente al capitale.</p>
+
+  <label style="display:flex;gap:8px;align-items:center;margin:12px 0">
+    <input type="checkbox" id="pacEnabled" style="width:auto"> Sistema PAC attivo
+  </label>
+
+  <label>Deposito mensile Stocks (€)</label>
+  <input type="number" id="pacStocks" min="0" step="50" value="500">
+
+  <label>Deposito mensile Forex (€)</label>
+  <input type="number" id="pacFx" min="0" step="50" value="200">
+
+  <button class="side-btn btn-start" style="width:100%;margin-top:14px" onclick="savePAC()">Salva</button>
+
+  <hr class="sep" style="margin:20px 0">
+  <h3 style="font-size:1rem">Storico depositi</h3>
+  <div id="pacHistory">Caricamento…</div>
+
+  <hr class="sep" style="margin:20px 0">
+  <details>
+    <summary style="cursor:pointer">+ Deposito manuale extra</summary>
+    <div style="padding:10px;background:var(--card2);border-radius:8px;margin-top:8px">
+      <label>Bot</label>
+      <select id="pmBot"><option value="stocks">Stocks</option><option value="fx">Forex</option></select>
+      <label>Importo (€)</label>
+      <input type="number" id="pmAmount" min="1" value="100">
+      <label>Nota</label>
+      <input type="text" id="pmNote" placeholder="opzionale">
+      <button class="side-btn btn-action" style="width:100%;margin-top:10px" onclick="manualDep()">Aggiungi</button>
+    </div>
+  </details>
+
+  <button class="side-btn btn-action" style="width:100%;margin-top:14px" onclick="hidePAC()">Chiudi</button>
 </div>
 </div>
 
@@ -3768,10 +4109,249 @@ function doCalc(){
 
 function fmt(v){return (v>=0?"+":"")+"\u20ac"+v.toFixed(2);}
 
+function showReports(){
+  document.getElementById("reportsModal").style.display="flex";
+  loadReports();
+}
+
+function hideReports(){
+  document.getElementById("reportsModal").style.display="none";
+}
+
+async function showPAC(){
+  document.getElementById("pacModal").style.display="flex";
+  try{
+    const config=await (await fetch(API+"/deposits/config")).json();
+    document.getElementById("pacEnabled").checked=!!config.enabled;
+    document.getElementById("pacStocks").value=Number(config.stocks||500);
+    document.getElementById("pacFx").value=Number(config.fx||200);
+    await loadPACHistory();
+    if(typeof refreshIcons==="function") refreshIcons();
+  }catch(e){
+    document.getElementById("pacHistory").innerHTML='<div style="color:var(--red);text-align:center;padding:14px">Errore: '+e.message+'</div>';
+  }
+}
+
+function hidePAC(){
+  document.getElementById("pacModal").style.display="none";
+}
+
+async function savePAC(){
+  const body={
+    enabled:document.getElementById("pacEnabled").checked,
+    stocks:parseFloat(document.getElementById("pacStocks").value)||0,
+    fx:parseFloat(document.getElementById("pacFx").value)||0,
+  };
+  const response=await fetch(API+"/deposits/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const data=await response.json();
+  if(data.error){alert(data.error);return;}
+  addLog("PAC salvato","buy");
+}
+
+async function loadPACHistory(){
+  const container=document.getElementById("pacHistory");
+  container.innerHTML='Caricamento…';
+  try{
+    const data=await (await fetch(API+"/deposits")).json();
+    if(data.error){
+      container.innerHTML='<div style="color:var(--red);text-align:center;padding:14px">Errore: '+data.error+'</div>';
+      return;
+    }
+    if(!data.deposits||!data.deposits.length){
+      container.innerHTML='<div style="color:var(--text3);text-align:center;padding:14px">Nessun deposito</div>';
+      return;
+    }
+
+    let html='<div class="table-shell" style="overflow-x:auto"><table style="font-size:.82rem"><thead><tr><th>Bot</th><th>Mese</th><th style="text-align:right">€</th><th></th></tr></thead><tbody>';
+    data.deposits.forEach((dep)=>{
+      const color=dep.bot==="stocks"?"var(--blue)":"var(--green)";
+      html+='<tr><td><span style="color:'+color+';font-weight:600">'+dep.bot+'</span></td><td>'+dep.year_month+'</td><td style="text-align:right" class="g mono">+€'+Number(dep.amount||0).toFixed(2)+'</td><td><button class="pos-close" onclick="delDep('+dep.id+')"><i data-lucide="x" class="lc-sm"></i></button></td></tr>';
+    });
+    html+='</tbody></table></div>';
+
+    if(data.totals&&data.totals.length){
+      html+='<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:.85rem">';
+      data.totals.forEach((totalRow)=>{
+        html+='<div style="display:flex;justify-content:space-between"><span>Tot '+totalRow.bot+':</span><span class="g mono"><b>+€'+Number(totalRow.total||0).toFixed(2)+'</b> ('+Number(totalRow.count||0)+')</span></div>';
+      });
+      html+='</div>';
+    }
+
+    container.innerHTML=html;
+    if(typeof refreshIcons==="function") refreshIcons();
+  }catch(e){
+    container.innerHTML='<div style="color:var(--red);text-align:center;padding:14px">Errore: '+e.message+'</div>';
+  }
+}
+
+async function delDep(id){
+  if(!confirm("Eliminare deposito? Storno capitale.")) return;
+  const response=await fetch(API+"/deposits/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+  const data=await response.json();
+  if(data.error){alert(data.error);return;}
+  loadPACHistory();
+  load();
+}
+
+async function manualDep(){
+  const bot=document.getElementById("pmBot").value;
+  const amount=parseFloat(document.getElementById("pmAmount").value);
+  const note=document.getElementById("pmNote").value;
+  if(!amount||amount<=0){alert("Importo invalido");return;}
+  if(!confirm("Aggiungere €"+amount+" a "+bot+"?")) return;
+  const response=await fetch(API+"/deposits/manual",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({bot,amount,note})});
+  const data=await response.json();
+  if(data.error){alert(data.error);return;}
+  addLog("+€"+amount+" a "+bot,"buy");
+  loadPACHistory();
+  load();
+}
+
+async function loadReports(){
+  const container=document.getElementById("reportsContent");
+  const reportsUrl=IS_FX?window.location.origin+"/api/fx/reports":API+"/reports";
+  container.innerHTML='<div style="text-align:center;color:var(--text3);padding:40px">Caricamento…</div>';
+
+  try{
+    const response=await fetch(reportsUrl);
+    const data=await response.json();
+
+    if(data.error){
+      container.innerHTML='<div style="text-align:center;color:var(--red);padding:40px">Errore: '+data.error+'</div>';
+      return;
+    }
+
+    if(!data.monthly||data.monthly.length===0){
+      container.innerHTML='<div style="text-align:center;color:var(--text3);padding:40px">Nessun trade chiuso ancora.<br>I resoconti appariranno qui dopo le prime chiusure.</div>';
+      return;
+    }
+
+    container.innerHTML=renderReports(data);
+    if(typeof refreshIcons==="function") refreshIcons();
+  }catch(e){
+    container.innerHTML='<div style="text-align:center;color:var(--red);padding:40px">Errore di rete: '+e.message+'</div>';
+  }
+}
+
+function renderReports(data){
+  const monthNames={"01":"Gen","02":"Feb","03":"Mar","04":"Apr","05":"Mag","06":"Giu","07":"Lug","08":"Ago","09":"Set","10":"Ott","11":"Nov","12":"Dic"};
+  const fmtMonth=(value)=>{
+    const [year,month]=String(value||"").split("-");
+    return monthNames[month]?monthNames[month]+" "+year:value;
+  };
+  const fmtPnl=(value)=>{
+    const amount=Number(value)||0;
+    return (amount>=0?"+":"")+"€"+amount.toFixed(2);
+  };
+  const pnlCls=(value)=>(Number(value)||0)>=0?"g":"r";
+
+  const total=data.total||{};
+  let html='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px">';
+  html+='<div class="stat" style="border-color:var(--blue);min-height:auto"><div class="stat-label">Capitale iniziale</div><div class="stat-value" style="font-size:1.3rem">€'+Number(data.initial_capital||0).toFixed(0)+'</div></div>';
+  html+='<div class="stat" style="border-color:var(--accent);min-height:auto"><div class="stat-label">PnL totale</div><div class="stat-value '+pnlCls(total.pnl)+'" style="font-size:1.3rem">'+fmtPnl(total.pnl)+'</div><div class="stat-sub '+pnlCls(total.pnl_pct)+'">'+((Number(total.pnl_pct)||0)>=0?'+':'')+Number(total.pnl_pct||0).toFixed(2)+'%</div></div>';
+  html+='<div class="stat" style="border-color:var(--green);min-height:auto"><div class="stat-label">Trade chiusi</div><div class="stat-value" style="font-size:1.3rem">'+Number(total.trades||0)+'</div><div class="stat-sub">'+Number(total.wins||0)+' wins</div></div>';
+  html+='<div class="stat" style="border-color:var(--cyan);min-height:auto"><div class="stat-label">Win rate</div><div class="stat-value '+(Number(total.wr||0)>=50?'g':'r')+'" style="font-size:1.3rem">'+Number(total.wr||0).toFixed(1)+'%</div></div>';
+  html+='</div>';
+
+  if(Number(data.totalDeposited||0)>0){
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px">';
+    html+='<div class="stat" style="border-color:var(--cyan);min-height:auto"><div class="stat-label">Capitale iniziale</div><div class="stat-value" style="font-size:1.2rem">€'+Number(data.initial_capital||0).toFixed(0)+'</div></div>';
+    html+='<div class="stat" style="border-color:var(--accent);min-height:auto"><div class="stat-label">Depositi PAC</div><div class="stat-value" style="font-size:1.2rem">+€'+Number(data.totalDeposited||0).toFixed(0)+'</div><div class="stat-sub">'+Number(data.numDeposits||0)+' versamenti</div></div>';
+    html+='<div class="stat" style="border-color:var(--green);min-height:auto"><div class="stat-label">Investito totale</div><div class="stat-value" style="font-size:1.2rem">€'+Number(data.totalInvested||0).toFixed(0)+'</div></div>';
+    html+='</div>';
+  }
+
+  html+='<div class="section-hdr" style="margin-top:0">Performance Mensile</div>';
+  html+='<div class="table-shell" style="margin-bottom:24px;overflow-x:auto"><table><thead><tr>';
+  html+='<th>Mese</th><th style="text-align:right">Trade</th><th style="text-align:right">WR</th><th style="text-align:right">PnL</th><th style="text-align:right">Media</th><th style="text-align:right">Best</th><th style="text-align:right">Worst</th>';
+  html+='</tr></thead><tbody>';
+  data.monthly.forEach((monthRow)=>{
+    const trades=Number(monthRow.trades)||0;
+    const wins=Number(monthRow.wins)||0;
+    const wr=trades?Math.round(wins/trades*100):0;
+    html+='<tr>';
+    html+='<td><b>'+fmtMonth(monthRow.month)+'</b></td>';
+    html+='<td style="text-align:right" class="mono">'+trades+'</td>';
+    html+='<td style="text-align:right" class="mono '+(wr>=50?'g':'r')+'">'+wr+'%</td>';
+    html+='<td style="text-align:right;font-weight:700" class="mono '+pnlCls(monthRow.pnl)+'">'+fmtPnl(monthRow.pnl)+'</td>';
+    html+='<td style="text-align:right" class="mono '+pnlCls(monthRow.avg_pnl)+'">'+fmtPnl(monthRow.avg_pnl)+'</td>';
+    html+='<td style="text-align:right" class="mono g">'+fmtPnl(monthRow.best)+'</td>';
+    html+='<td style="text-align:right" class="mono r">'+fmtPnl(monthRow.worst)+'</td>';
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+
+  if(data.monthlyByMode&&data.monthlyByMode.length>0){
+    const modeColors={safe:"var(--green)",mid:"var(--blue)",aggressive:"var(--orange)"};
+    html+='<div class="section-hdr">Performance per Modalità</div>';
+    html+='<div class="table-shell" style="margin-bottom:24px;overflow-x:auto"><table><thead><tr>';
+    html+='<th>Mese</th><th>Modalità</th><th style="text-align:right">Trade</th><th style="text-align:right">WR</th><th style="text-align:right">PnL</th>';
+    html+='</tr></thead><tbody>';
+    data.monthlyByMode.forEach((modeRow)=>{
+      const trades=Number(modeRow.trades)||0;
+      const wins=Number(modeRow.wins)||0;
+      const wr=trades?Math.round(wins/trades*100):0;
+      const mode=String(modeRow.mode||"mid").toLowerCase();
+      html+='<tr>';
+      html+='<td><b>'+fmtMonth(modeRow.month)+'</b></td>';
+      html+='<td><span style="color:'+(modeColors[mode]||'var(--text2)')+';font-weight:600;text-transform:capitalize">'+mode+'</span></td>';
+      html+='<td style="text-align:right" class="mono">'+trades+'</td>';
+      html+='<td style="text-align:right" class="mono '+(wr>=50?'g':'r')+'">'+wr+'%</td>';
+      html+='<td style="text-align:right;font-weight:700" class="mono '+pnlCls(modeRow.pnl)+'">'+fmtPnl(modeRow.pnl)+'</td>';
+      html+='</tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+
+  if(data.topAssets&&data.topAssets.length>0){
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:24px">';
+    html+='<div>';
+    html+='<div class="section-hdr" style="margin-top:0"><i data-lucide="trending-up" class="lc-sm" style="color:var(--green)"></i> Top 5 vincenti</div>';
+    html+='<div class="table-shell" style="overflow-x:auto"><table><thead><tr><th>Asset</th><th style="text-align:right">Trade</th><th style="text-align:right">PnL</th></tr></thead><tbody>';
+    data.topAssets.forEach((asset)=>{
+      html+='<tr><td><b>'+(asset.name||asset.ticker)+'</b><br><span style="font-size:.7rem;color:var(--text3)">'+(asset.ticker||'—')+'</span></td>';
+      html+='<td style="text-align:right" class="mono">'+(Number(asset.trades)||0)+'</td>';
+      html+='<td style="text-align:right;font-weight:700" class="mono g">'+fmtPnl(asset.total_pnl)+'</td></tr>';
+    });
+    html+='</tbody></table></div></div>';
+
+    if(data.worstAssets&&data.worstAssets.length>0){
+      html+='<div>';
+      html+='<div class="section-hdr" style="margin-top:0"><i data-lucide="trending-down" class="lc-sm" style="color:var(--red)"></i> Top 3 perdenti</div>';
+      html+='<div class="table-shell" style="overflow-x:auto"><table><thead><tr><th>Asset</th><th style="text-align:right">Trade</th><th style="text-align:right">PnL</th></tr></thead><tbody>';
+      data.worstAssets.forEach((asset)=>{
+        html+='<tr><td><b>'+(asset.name||asset.ticker)+'</b><br><span style="font-size:.7rem;color:var(--text3)">'+(asset.ticker||'—')+'</span></td>';
+        html+='<td style="text-align:right" class="mono">'+(Number(asset.trades)||0)+'</td>';
+        html+='<td style="text-align:right;font-weight:700" class="mono r">'+fmtPnl(asset.total_pnl)+'</td></tr>';
+      });
+      html+='</tbody></table></div></div>';
+    }
+
+    html+='</div>';
+  }
+
+  if(data.equityCurve&&data.equityCurve.length>0){
+    html+='<div class="section-hdr">Equity Curve Mensile</div>';
+    html+='<div class="table-shell" style="overflow-x:auto"><table><thead><tr><th>Mese</th><th style="text-align:right">PnL Mese</th><th style="text-align:right">Cumulativo</th><th style="text-align:right">Capitale</th></tr></thead><tbody>';
+    data.equityCurve.forEach((point)=>{
+      const equity=(Number(data.initial_capital)||0)+(Number(point.cumulative_pnl)||0);
+      html+='<tr><td><b>'+fmtMonth(point.month)+'</b></td>';
+      html+='<td style="text-align:right" class="mono '+pnlCls(point.monthly_pnl)+'">'+fmtPnl(point.monthly_pnl)+'</td>';
+      html+='<td style="text-align:right;font-weight:700" class="mono '+pnlCls(point.cumulative_pnl)+'">'+fmtPnl(point.cumulative_pnl)+'</td>';
+      html+='<td style="text-align:right" class="mono">€'+equity.toFixed(2)+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+
+  return html;
+}
+
 // Close modal on bg click
 document.getElementById("calcModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideCalc();});
 document.getElementById("settingsModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideSettings();});
 document.getElementById("chartModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideChart();});
+document.getElementById("reportsModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hideReports();});
+document.getElementById("pacModal").addEventListener("click",e=>{if(e.target.classList.contains("modal-bg"))hidePAC();});
 document.getElementById("calcModeAuto").addEventListener("click",()=>setCalcMode("auto"));
 document.getElementById("calcModeManual").addEventListener("click",()=>setCalcMode("manual"));
 document.getElementById("chartInterval").addEventListener("change",loadChart);
@@ -3881,6 +4461,7 @@ export default {
 
   // Cron trigger → scan every 5 min
   async scheduled(event, env) {
+    await processMonthlyDeposits(env);
     await scan(env.DB, env);
     await scanFx(env.DB, env);
   },
