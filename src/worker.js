@@ -69,11 +69,11 @@ const MODE_PRESETS = {
     default_slots: 5,
   },
   aggressive: {
-    score_threshold: 0.5,
+    score_threshold: 0.7,
     risk_per_trade: 0.03,
-    stop_loss_pct: 0.035,
+    stop_loss_pct: 0.025,
     trailing_activation: 0.01,
-    trailing_distance: 0.008,
+    trailing_distance: 0.01,
     min_hold_hours: 0.5,
     cooldown_minutes: 15,
     use_spy_filter: false,
@@ -2952,15 +2952,8 @@ tr:hover td{background:rgba(255,255,255,.03)}
   <div class="side-stat" id="sPnl">P&L chiusi: —</div>
 
   <hr class="sep">
-  <div class="brain-section">
-    <div class="brain-label"><i data-lucide="brain"></i>Brain <span class="info-i" data-tip="Auto-apprendimento.\\nDopo ogni trade, aggiusta i pesi\\ndegli indicatori. Più trade fa,\\npiù diventa preciso.">ⓘ</span></div>
-    <div class="side-stat" id="bConf">Confidenza: 0%</div>
-    <div class="side-stat" id="bTrained">Addestrato: 0 trade</div>
-    <div class="side-stat" style="font-size:.75rem;color:var(--text3);word-break:break-all" id="bLast"></div>
-  </div>
-  <hr class="sep">
-  <div class="side-label">Modalità</div>
-  <div id="modesContainer"></div>
+    <div class="side-label"><i data-lucide="brain" class="lc-sm" style="margin-right:4px"></i> Brain (confidence per modalità)</div>
+    <div id="brainsContainer"></div>
 </div>
 </div>
 
@@ -3834,27 +3827,41 @@ async function load(){
     }
 
     // Brain
-    const br=d.brain||{};
-    document.getElementById("bConf").textContent="Confidenza: "+(br.confidence||0).toFixed(0)+"%";
-    document.getElementById("bConf").style.color=br.confidence>=50?"var(--green)":(br.confidence>=20?"var(--yellow)":"var(--text3)");
-    document.getElementById("bTrained").textContent="Addestrato: "+(br.totalTrained||0)+" trade";
-    const modesEl=document.getElementById("modesContainer");
-    if(modesEl){
+    const brainsEl=document.getElementById("brainsContainer");
+    if(brainsEl){
       if(d.modes){
-        modesEl.innerHTML=["safe","mid","aggressive"].map((mode)=>{
+        const colors={safe:"var(--green)",mid:"var(--blue)",aggressive:"var(--orange)"};
+        brainsEl.innerHTML=["safe","mid","aggressive"].map((mode)=>{
           const ms=d.modes[mode]||{};
-          const color=getModeColor(mode);
-          const pnlValue=Number(ms.pnl||0);
-          const pnlCls=pnlValue>=0?"g":"r";
-          return '<div style="background:var(--card);border-radius:8px;padding:10px;margin-bottom:6px;border-left:3px solid '+color+'">'
-            +'<div style="font-weight:700;font-size:.8rem;text-transform:capitalize;color:'+color+'">'+mode+'</div>'
-            +'<div style="font-size:.75rem;color:var(--text2)">Posizioni: '+(ms.open||0)+'/'+(ms.slots||0)+'</div>'
-            +'<div style="font-size:.75rem;color:var(--text2)">Trade: '+(ms.trades||0)+' ('+(ms.wr||0)+'% WR)</div>'
-            +'<div style="font-size:.75rem" class="'+pnlCls+'">PnL: '+(pnlValue>=0?'+':'')+'€'+pnlValue.toFixed(2)+'</div>'
+          const trained=ms.trained||0;
+          const confidence=Math.min(trained,100);
+          const learning=trained>=5;
+          const statusLabel=trained<5?(trained+"/5 raccolta dati"):(trained<20?(trained+" (in apprendimento)"):(trained+" (stabile)"));
+          const weights=ms.weights||{};
+          const sortedWeights=Object.entries(weights)
+            .map(([key,value])=>({key,value:parseFloat(value)}))
+            .filter((weight)=>Number.isFinite(weight.value))
+            .sort((a,b)=>b.value-a.value)
+            .slice(0,3);
+
+          return '<div style="background:var(--card);border-radius:8px;padding:10px;margin-bottom:8px;border-left:3px solid '+colors[mode]+'">'
+            +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+            +'<span style="font-weight:700;font-size:.82rem;text-transform:capitalize;color:'+colors[mode]+'">'+mode+'</span>'
+            +'<span style="font-size:.7rem;color:'+(learning?'var(--text2)':'var(--text3)')+'">'+statusLabel+'</span>'
+            +'</div>'
+            +'<div style="background:var(--card2);border-radius:4px;height:6px;overflow:hidden;margin-bottom:6px">'
+            +'<div style="height:100%;background:'+colors[mode]+';width:'+confidence+'%;transition:width 0.3s"></div>'
+            +'</div>'
+            +(sortedWeights.length
+              ?'<div style="font-size:.7rem;color:var(--text3);margin-top:4px">Top: '
+                +sortedWeights.map((weight)=>'<span class="mono" style="color:var(--text2)">'+weight.key.replace('_',' ')+' '+weight.value.toFixed(2)+'</span>').join(' · ')
+                +'</div>'
+              :'')
             +'</div>';
         }).join("");
+        if(typeof refreshIcons==="function") refreshIcons();
       } else {
-        modesEl.innerHTML='<div style="font-size:.75rem;color:var(--text3)">Statistiche modalità non disponibili</div>';
+        brainsEl.innerHTML='<div style="font-size:.75rem;color:var(--text3)">Statistiche modalità non disponibili</div>';
       }
     }
 
