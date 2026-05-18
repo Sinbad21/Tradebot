@@ -45,9 +45,9 @@ const MODE_PRESETS = {
   safe: {
     score_threshold: 1.2,
     risk_per_trade: 0.01,
-    stop_loss_pct: 0.02,
-    trailing_activation: 0.02,
-    trailing_distance: 0.018,
+    stop_loss_pct: 0.015,
+    trailing_activation: 0.012,
+    trailing_distance: 0.012,
     min_hold_hours: 4,
     cooldown_minutes: 60,
     use_spy_filter: true,
