@@ -91,9 +91,9 @@ const MODE_PRESETS = {
     default_slots: 5,
   },
   aggressive: {
-    score_threshold: 0.8,  // auto-tuned 2026-05-15: WR 14.5% e PnL -€195 su 69 trade, R1 +0.1
+    score_threshold: 0.9,  // auto-tuned 2026-05-22: WR 3.7% e PnL -€175.61 su 27 trade, R1 +0.1
     risk_per_trade: 0.03,
-    stop_loss_pct: 0.020,  // auto-tuned 2026-05-15: R1 -0.005 per limitare perdite (100% chiuse a SL)
+    stop_loss_pct: 0.015,  // auto-tuned 2026-05-22: R1 -0.005 per limitare perdite (100% chiuse a SL, avg 2.6h)
     trailing_activation: 0.01,
     trailing_distance: 0.01,
     min_hold_hours: 0.5,
