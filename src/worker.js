@@ -3033,8 +3033,8 @@ async function handleAPI(request, env) {
 
   // GET / — dashboard HTML
   if (path === "/") {
-    return cors(new Response(DASHBOARD_HTML, {
-      headers: { "Content-Type": "text/html" },
+    return serveStaticDashboardAsset("/") || serveStaticDashboardAsset("/index.html") || cors(new Response(dashboardIndexHtml, {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
     }));
   }
 
