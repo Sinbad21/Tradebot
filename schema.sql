@@ -48,7 +48,26 @@ CREATE TABLE IF NOT EXISTS brain_history (
   indicators TEXT,
   pnl REAL,
   pnl_pct REAL,
-  created_at TEXT
+  created_at TEXT,
+  mode TEXT DEFAULT 'mid'
+);
+
+CREATE TABLE IF NOT EXISTS brain_safe (
+  indicator TEXT PRIMARY KEY,
+  weight REAL NOT NULL,
+  default_weight REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS brain_mid (
+  indicator TEXT PRIMARY KEY,
+  weight REAL NOT NULL,
+  default_weight REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS brain_aggressive (
+  indicator TEXT PRIMARY KEY,
+  weight REAL NOT NULL,
+  default_weight REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS config (
@@ -72,6 +91,31 @@ CREATE TABLE IF NOT EXISTS cooldowns (
   expires_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS deposits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot TEXT NOT NULL,
+  amount REAL NOT NULL,
+  year_month TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  direction TEXT,
+  price REAL,
+  pct REAL,
+  window_size TEXT,
+  conf REAL,
+  pattern TEXT,
+  pnl REAL,
+  status TEXT NOT NULL DEFAULT 'armed',
+  fired_at TEXT,
+  created_at TEXT NOT NULL
+);
+
 -- Valori iniziali brain
 INSERT OR IGNORE INTO brain VALUES ('macd_cross', 1.0, 1.0);
 INSERT OR IGNORE INTO brain VALUES ('macd_hist', 0.2, 0.2);
@@ -81,9 +125,45 @@ INSERT OR IGNORE INTO brain VALUES ('bollinger', 0.5, 0.5);
 INSERT OR IGNORE INTO brain VALUES ('mean_rev', 0.8, 0.8);
 INSERT OR IGNORE INTO brain VALUES ('vol_growing', 0.3, 0.3);
 
+INSERT OR IGNORE INTO brain_safe VALUES ('macd_cross', 1.0, 1.0);
+INSERT OR IGNORE INTO brain_safe VALUES ('macd_hist', 0.2, 0.2);
+INSERT OR IGNORE INTO brain_safe VALUES ('rsi', 0.6, 0.6);
+INSERT OR IGNORE INTO brain_safe VALUES ('ema_trend', 0.3, 0.3);
+INSERT OR IGNORE INTO brain_safe VALUES ('bollinger', 0.5, 0.5);
+INSERT OR IGNORE INTO brain_safe VALUES ('mean_rev', 0.8, 0.8);
+INSERT OR IGNORE INTO brain_safe VALUES ('vol_growing', 0.3, 0.3);
+
+INSERT OR IGNORE INTO brain_mid VALUES ('macd_cross', 1.0, 1.0);
+INSERT OR IGNORE INTO brain_mid VALUES ('macd_hist', 0.2, 0.2);
+INSERT OR IGNORE INTO brain_mid VALUES ('rsi', 0.6, 0.6);
+INSERT OR IGNORE INTO brain_mid VALUES ('ema_trend', 0.3, 0.3);
+INSERT OR IGNORE INTO brain_mid VALUES ('bollinger', 0.5, 0.5);
+INSERT OR IGNORE INTO brain_mid VALUES ('mean_rev', 0.8, 0.8);
+INSERT OR IGNORE INTO brain_mid VALUES ('vol_growing', 0.3, 0.3);
+
+INSERT OR IGNORE INTO brain_aggressive VALUES ('macd_cross', 1.0, 1.0);
+INSERT OR IGNORE INTO brain_aggressive VALUES ('macd_hist', 0.2, 0.2);
+INSERT OR IGNORE INTO brain_aggressive VALUES ('rsi', 0.6, 0.6);
+INSERT OR IGNORE INTO brain_aggressive VALUES ('ema_trend', 0.3, 0.3);
+INSERT OR IGNORE INTO brain_aggressive VALUES ('bollinger', 0.5, 0.5);
+INSERT OR IGNORE INTO brain_aggressive VALUES ('mean_rev', 0.8, 0.8);
+INSERT OR IGNORE INTO brain_aggressive VALUES ('vol_growing', 0.3, 0.3);
+
 -- Config iniziale
 INSERT OR IGNORE INTO config VALUES ('capital', '5000');
 INSERT OR IGNORE INTO config VALUES ('total_trades', '0');
+INSERT OR IGNORE INTO config VALUES ('scan_count', '0');
+INSERT OR IGNORE INTO config VALUES ('scan_activity', '[]');
+INSERT OR IGNORE INTO config VALUES ('bot_paused', '0');
+INSERT OR IGNORE INTO config VALUES ('trades_safe', '0');
+INSERT OR IGNORE INTO config VALUES ('trades_mid', '0');
+INSERT OR IGNORE INTO config VALUES ('trades_aggressive', '0');
+INSERT OR IGNORE INTO config VALUES ('slots_safe', '3');
+INSERT OR IGNORE INTO config VALUES ('slots_mid', '5');
+INSERT OR IGNORE INTO config VALUES ('slots_aggressive', '2');
+INSERT OR IGNORE INTO config VALUES ('monthly_deposit_stocks', '500');
+INSERT OR IGNORE INTO config VALUES ('monthly_deposit_fx', '200');
+INSERT OR IGNORE INTO config VALUES ('monthly_deposit_enabled', '1');
 
 -- FX tables
 CREATE TABLE IF NOT EXISTS positions_fx (

@@ -1,0 +1,159 @@
+/* ─────────────────────────────────────────────────────────────
+   TradeBot · Design Tokens
+   Bold & futuristic — glass + cyan/violet glow on deep dark
+───────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Surface ─────────────────────────────────────────────── */
+  --bg-0: #0A0B0F;          /* deepest */
+  --bg-1: #0E1018;
+  --bg-2: #14161E;
+  --bg-3: #1A1D27;
+
+  /* Glass (apply backdrop-filter on element using these) */
+  --glass-fill:    rgba(20, 22, 30, 0.60);
+  --glass-fill-2:  rgba(20, 22, 30, 0.45);
+  --glass-border:  rgba(255, 255, 255, 0.08);
+  --glass-border-2:rgba(255, 255, 255, 0.14);
+  --glass-blur:    blur(24px) saturate(180%);
+
+  /* ── Text ────────────────────────────────────────────────── */
+  --text-1: #FFFFFF;
+  --text-2: rgba(255, 255, 255, 0.72);
+  --text-3: rgba(255, 255, 255, 0.52);
+  --text-4: rgba(255, 255, 255, 0.32);
+  --text-5: rgba(255, 255, 255, 0.18);
+
+  /* ── Accents ─────────────────────────────────────────────── */
+  --cyan:    #00E5FF;
+  --cyan-2:  #34F2FF;
+  --violet:  #A855F7;
+  --violet-2:#C084FC;
+
+  /* P&L */
+  --profit:  #00FF88;
+  --profit-soft: rgba(0, 255, 136, 0.12);
+  --loss:    #FF3D71;
+  --loss-soft:   rgba(255, 61, 113, 0.12);
+
+  /* Status */
+  --amber:   #FFB020;
+  --gray:    #6B7280;
+
+  /* ── Glows ───────────────────────────────────────────────── */
+  --glow-cyan:    0 0 24px rgba(0, 229, 255, 0.35), 0 0 64px rgba(0, 229, 255, 0.15);
+  --glow-cyan-sm: 0 0 12px rgba(0, 229, 255, 0.40);
+  --glow-violet:  0 0 24px rgba(168, 85, 247, 0.35), 0 0 64px rgba(168, 85, 247, 0.15);
+  --glow-violet-sm:0 0 12px rgba(168, 85, 247, 0.40);
+  --glow-profit:  0 0 12px rgba(0, 255, 136, 0.40);
+  --glow-loss:    0 0 12px rgba(255, 61, 113, 0.40);
+
+  /* ── Shadows ─────────────────────────────────────────────── */
+  --sh-card:   0 1px 0 rgba(255,255,255,0.04) inset, 0 24px 60px -20px rgba(0,0,0,0.6), 0 8px 16px -8px rgba(0,0,0,0.4);
+  --sh-card-h: 0 1px 0 rgba(255,255,255,0.06) inset, 0 28px 80px -20px rgba(0,229,255,0.18), 0 12px 24px -8px rgba(0,0,0,0.6);
+  --sh-pop:    0 24px 60px -12px rgba(0,0,0,0.7), 0 12px 24px -6px rgba(0,0,0,0.45);
+
+  /* ── Type ────────────────────────────────────────────────── */
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body:    "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* ── Radii ───────────────────────────────────────────────── */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --r-2xl: 32px;
+
+  /* ── Easing ──────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:  cubic-bezier(0.7, 0, 0.84, 0);
+  --t-fast: 180ms;
+  --t-med:  320ms;
+  --t-slow: 480ms;
+}
+
+/* ── Reset + base ───────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+html {
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg-0);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Background layers — sit behind content */
+.bg-grid, .bg-bloom, .bg-noise {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, #000 30%, transparent 90%);
+}
+.bg-bloom {
+  background:
+    radial-gradient(ellipse 60% 40% at 15% 10%, rgba(168, 85, 247, 0.18), transparent 60%),
+    radial-gradient(ellipse 50% 35% at 85% 5%,  rgba(0, 229, 255, 0.10), transparent 65%),
+    radial-gradient(ellipse 70% 50% at 50% 110%, rgba(0, 229, 255, 0.06), transparent 60%);
+}
+.bg-noise {
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  mix-blend-mode: overlay;
+}
+
+main { position: relative; z-index: 1; }
+
+/* ── Typography utilities ──────────────────────────────────── */
+.t-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.t-mono     { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+.t-num      { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1, "ss01" 1; font-weight: 500; }
+.t-kicker   { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-3); }
+.t-label    { font-family: var(--font-body); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500; }
+.t-h1       { font-family: var(--font-display); font-weight: 700; font-size: 44px; letter-spacing: -0.03em; line-height: 1.05; }
+.t-h2       { font-family: var(--font-display); font-weight: 600; font-size: 28px; letter-spacing: -0.02em; line-height: 1.1; }
+.t-h3       { font-family: var(--font-display); font-weight: 600; font-size: 18px; letter-spacing: -0.01em; line-height: 1.2; }
+.t-body     { font-family: var(--font-body); font-size: 14px; color: var(--text-2); }
+.t-small    { font-family: var(--font-body); font-size: 12px; color: var(--text-3); }
+.t-profit   { color: var(--profit); text-shadow: var(--glow-profit); }
+.t-loss     { color: var(--loss);   text-shadow: var(--glow-loss);   }
+.t-cyan     { color: var(--cyan); }
+.t-violet   { color: var(--violet); }
+
+/* ── Focus ──────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

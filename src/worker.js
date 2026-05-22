@@ -1,3 +1,25 @@
+import dashboardIndexHtml from "../index.html";
+import tokensCss from "../tokens.css";
+import componentsCss from "../components.css";
+import brainPanelCss from "../brain-panel.css";
+import productShellCss from "../product-shell.css";
+import tradeHistoryCss from "../trade-history.css";
+import assetDetailCss from "../asset-detail.css";
+import primitivesJsx from "../primitives.jsx";
+import mockDataJsx from "../mock-data.jsx";
+import statcardJsx from "../statcard.jsx";
+import equityCurveJsx from "../equity-curve.jsx";
+import watchlistJsx from "../watchlist.jsx";
+import brainPanelJsx from "../brain-panel.jsx";
+import tradesJsx from "../trades.jsx";
+import tradeHistoryJsx from "../trade-history.jsx";
+import settingsScreenJsx from "../settings-screen.jsx";
+import assetDetailJsx from "../asset-detail.jsx";
+import alertsScreenJsx from "../alerts-screen.jsx";
+import tweaksJsx from "../tweaks.jsx";
+import commandPaletteJsx from "../command-palette.jsx";
+import appJsx from "../app.jsx";
+
 /**
  * Trading Bot v3.0 — Cloudflare Worker
  * 
@@ -153,6 +175,129 @@ async function seedBrainTable(db, tableName) {
     const defaultWeight = DEFAULT_BRAIN_WEIGHTS[indicator] ?? 1.0;
     await db.prepare(`INSERT OR IGNORE INTO ${tableName} (indicator, weight, default_weight) VALUES (?, ?, ?)`).bind(indicator, defaultWeight, defaultWeight).run();
   }
+}
+
+async function ensureCoreSchema(db) {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    shares REAL NOT NULL,
+    stop_loss REAL NOT NULL,
+    take_profit REAL NOT NULL,
+    highest REAL NOT NULL,
+    trailing_active INTEGER DEFAULT 0,
+    cost REAL NOT NULL,
+    opened_at TEXT NOT NULL,
+    score_at_entry REAL,
+    auto_sl INTEGER DEFAULT 1,
+    current_price REAL,
+    unrealized_pnl REAL DEFAULT 0,
+    unrealized_pct REAL DEFAULT 0,
+    brain_indicators TEXT DEFAULT '[]',
+    mode TEXT DEFAULT 'mid'
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS closed_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    name TEXT NOT NULL,
+    entry_price REAL,
+    exit_price REAL,
+    shares REAL,
+    cost REAL,
+    revenue REAL,
+    pnl REAL,
+    pnl_pct REAL,
+    reason TEXT,
+    opened_at TEXT,
+    closed_at TEXT,
+    brain_indicators TEXT DEFAULT '[]',
+    mode TEXT DEFAULT 'mid'
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS brain (
+    indicator TEXT PRIMARY KEY,
+    weight REAL NOT NULL,
+    default_weight REAL NOT NULL
+  )`).run();
+  await seedBrainTable(db, "brain");
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS brain_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    indicators TEXT,
+    pnl REAL,
+    pnl_pct REAL,
+    created_at TEXT,
+    mode TEXT DEFAULT 'mid'
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS scan_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    ticker TEXT,
+    price REAL,
+    score REAL,
+    rsi REAL,
+    signal INTEGER,
+    reasons TEXT
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS cooldowns (
+    ticker TEXT PRIMARY KEY,
+    expires_at TEXT NOT NULL
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS deposits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot TEXT NOT NULL,
+    amount REAL NOT NULL,
+    year_month TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    note TEXT
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    direction TEXT,
+    price REAL,
+    pct REAL,
+    window_size TEXT,
+    conf REAL,
+    pattern TEXT,
+    pnl REAL,
+    status TEXT NOT NULL DEFAULT 'armed',
+    fired_at TEXT,
+    created_at TEXT NOT NULL
+  )`).run();
+
+  for (const mode of MODE_ORDER) {
+    await db.prepare(`CREATE TABLE IF NOT EXISTS brain_${mode} (
+      indicator TEXT PRIMARY KEY,
+      weight REAL NOT NULL,
+      default_weight REAL NOT NULL
+    )`).run();
+    await seedBrainTable(db, `brain_${mode}`);
+    await db.prepare("INSERT OR IGNORE INTO config VALUES (?, ?)").bind(`trades_${mode}`, "0").run();
+    await db.prepare("INSERT OR IGNORE INTO config VALUES (?, ?)").bind(`slots_${mode}`, String(MODE_PRESETS[mode].default_slots)).run();
+  }
+
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('capital', '5000')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('total_trades', '0')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('scan_count', '0')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('scan_activity', '[]')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('bot_paused', '0')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('monthly_deposit_stocks', '500')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('monthly_deposit_fx', '200')").run();
+  await db.prepare("INSERT OR IGNORE INTO config VALUES ('monthly_deposit_enabled', '1')").run();
 }
 
 async function ensureFxSchema(db) {
@@ -959,6 +1104,16 @@ async function setModeSlotsFx(db, mode, slots) {
   return n;
 }
 
+async function getBotPaused(db) {
+  const row = await db.prepare("SELECT value FROM config WHERE key='bot_paused'").first();
+  return row ? row.value === "1" : false;
+}
+
+async function setBotPaused(db, paused) {
+  await db.prepare("INSERT OR REPLACE INTO config VALUES ('bot_paused', ?)").bind(paused ? "1" : "0").run();
+  return paused;
+}
+
 async function getWeights(db, mode = "mid") {
   const modeKey = normalizeMode(mode);
   const rows = (await db.prepare(`SELECT * FROM brain_${modeKey}`).all()).results || [];
@@ -1322,6 +1477,274 @@ async function scanFx(db, env) {
   };
 
   for (const pos of positions) {
+
+  function extractLogMode(reasons = "") {
+    const match = /^\[(safe|mid|aggressive)\]\s*/i.exec(reasons || "");
+    return match ? normalizeMode(match[1].toLowerCase()) : "mid";
+  }
+
+  function splitLogReasons(reasons = "") {
+    return (reasons || "")
+      .replace(/^\[[^\]]+\]\s*/i, "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+
+  function colorFromTicker(ticker) {
+    const palette = [
+      "#00E5FF",
+      "#A855F7",
+      "#00FF88",
+      "#FFB020",
+      "#FF3D71",
+      "#7BD7FF",
+      "#84CC16",
+      "#F97316",
+    ];
+    let hash = 0;
+    for (const ch of ticker) hash = ((hash << 5) - hash) + ch.charCodeAt(0);
+    return palette[Math.abs(hash) % palette.length];
+  }
+
+  function inferAssetMeta(ticker) {
+    if (ticker.includes("-USD")) return { exch: "CRYPTO", klass: "crypto", color: colorFromTicker(ticker) };
+    if (ticker.endsWith(".MI") || ticker.endsWith(".DE") || ticker.endsWith(".PA") || ticker.endsWith(".AS")) {
+      return { exch: "EU", klass: "stock", color: colorFromTicker(ticker) };
+    }
+    return { exch: "US", klass: "stock", color: colorFromTicker(ticker) };
+  }
+
+  function scoreToConfidence(score, signal = 0) {
+    const base = 52 + (Number(score) || 0) * 18 + (signal === 1 ? 12 : signal === -1 ? -10 : 0);
+    return Math.max(8, Math.min(98, Math.round(base)));
+  }
+
+  function deriveAssetStatus(position, signal, confidence) {
+    if (position) return "holding";
+    if (signal === 1 || confidence >= 80) return "signaling";
+    if (signal === -1 || confidence < 40) return "cooldown";
+    return "watching";
+  }
+
+  function buildSparklineFromHistory(history, fallbackPrice = 0) {
+    const points = history
+      .slice(0, 12)
+      .map((entry) => Number(entry.price) || 0)
+      .filter((value) => value > 0)
+      .reverse();
+
+    if (points.length >= 2) {
+      return points.map((value, _idx, arr) => roundPrice(value, arr[arr.length - 1] || value));
+    }
+
+    if (fallbackPrice > 0) {
+      const base = Number(fallbackPrice);
+      return [
+        roundPrice(base * 0.994, base),
+        roundPrice(base * 1.002, base),
+        roundPrice(base, base),
+      ];
+    }
+
+    return [0, 0, 0];
+  }
+
+  function buildPatternHistory(reasonTokens, latestCreatedAt, confidence) {
+    const createdAtMs = latestCreatedAt ? new Date(latestCreatedAt).getTime() : Date.now();
+    if (!reasonTokens.length) {
+      return [{ p: "waiting", strength: (confidence / 100).toFixed(2), minsAgo: 5, outcome: "active" }];
+    }
+
+    return reasonTokens.slice(0, 3).map((token, index) => ({
+      p: token.toLowerCase().replace(/\s+/g, "-"),
+      strength: Math.max(0.35, Math.min(0.99, confidence / 100 - index * 0.08)).toFixed(2),
+      minsAgo: Math.max(1, Math.round((Date.now() - createdAtMs) / 60000) + index * 5),
+      outcome: index === 0 && confidence >= 75 ? "active" : confidence >= 65 ? "filled" : "expired",
+    }));
+  }
+
+  function buildReasoning(name, reasonTokens, position, signal) {
+    if (position) {
+      return `${name} has an open position with live risk controls active. ${reasonTokens.slice(0, 2).join(", ") || "The latest scan still supports the trade."}`;
+    }
+    if (reasonTokens.length) {
+      return `${name} is being scored from the latest scan. ${reasonTokens.slice(0, 3).join(", ")}.`;
+    }
+    if (signal === -1) {
+      return `${name} is in cooldown after a weak or risk-off signal.`;
+    }
+    return `${name} is being monitored for a cleaner setup on the next scan cycle.`;
+  }
+
+  function mapAlertRow(row) {
+    return {
+      ...row,
+      price: row.price == null ? null : Number(row.price),
+      pct: row.pct == null ? null : Number(row.pct),
+      conf: row.conf == null ? null : Number(row.conf),
+      pnl: row.pnl == null ? null : Number(row.pnl),
+      window: row.window_size || null,
+    };
+  }
+
+  async function listAlerts(db) {
+    const rows = (await db.prepare("SELECT * FROM alerts ORDER BY id DESC").all()).results || [];
+    return rows.map(mapAlertRow);
+  }
+
+  async function getBrainHistorySnapshot(db, limit = 8) {
+    const rows = (await db.prepare(`SELECT id, indicators, pnl, pnl_pct, created_at, mode FROM brain_history ORDER BY id DESC LIMIT ${Math.max(1, Math.min(40, limit))}`).all()).results || [];
+    return rows.map((row) => ({
+      ...row,
+      pnl: Number(row.pnl) || 0,
+      pnl_pct: Number(row.pnl_pct) || 0,
+      indicators: (() => {
+        try {
+          return JSON.parse(row.indicators || "[]");
+        } catch (e) {
+          return [];
+        }
+      })(),
+    }));
+  }
+
+  async function adjustBrainWeights(db, brainTable, cfg, indicators, pnl, pnlPct, totalTrained) {
+    if (!Array.isArray(indicators) || !indicators.length) return { adjustments: [], decayFactor: 1, isWin: pnl > 0 };
+
+    const isWin = pnl > 0;
+    const magnitude = Math.min(Math.abs(pnlPct) / 5, 1.0);
+    const decayFactor = Math.max(0.3, 1.0 - (totalTrained / 500));
+    const delta = cfg.learn_rate * magnitude * decayFactor;
+    const adjustments = [];
+    const DECAY_TO_DEFAULT = 0.02;
+
+    for (const indicator of indicators) {
+      const row = await db.prepare(`SELECT weight, default_weight FROM ${brainTable} WHERE indicator=?`).bind(indicator).first();
+      if (!row) continue;
+      let newWeight = isWin ? Math.min(row.weight + delta, cfg.max_weight) : Math.max(row.weight - delta, cfg.min_weight);
+      newWeight = newWeight + (row.default_weight - newWeight) * DECAY_TO_DEFAULT;
+      await db.prepare(`UPDATE ${brainTable} SET weight=? WHERE indicator=?`).bind(+newWeight.toFixed(4), indicator).run();
+      adjustments.push(`${indicator}${isWin ? "+" : "-"}${delta.toFixed(3)}`);
+    }
+
+    if (!isWin && indicators.length <= 2) {
+      const inactive = ALL_BRAIN_INDICATORS.filter((indicator) => !indicators.includes(indicator));
+      const smallBonus = cfg.learn_rate * 0.08 * decayFactor;
+      for (const indicator of inactive) {
+        const row = await db.prepare(`SELECT weight, default_weight FROM ${brainTable} WHERE indicator=?`).bind(indicator).first();
+        if (!row) continue;
+        let newWeight = Math.min(row.weight + smallBonus, cfg.max_weight);
+        newWeight = newWeight + (row.default_weight - newWeight) * DECAY_TO_DEFAULT;
+        await db.prepare(`UPDATE ${brainTable} SET weight=? WHERE indicator=?`).bind(+newWeight.toFixed(4), indicator).run();
+      }
+    }
+
+    return { adjustments, decayFactor, isWin };
+  }
+
+  async function retrainBrain(db, mode = "mid", limit = 50) {
+    const modeKey = normalizeMode(mode);
+    const brainTable = `brain_${modeKey}`;
+    const cfg = await getSettings(db);
+    const totalRow = await db.prepare("SELECT COUNT(*) as count FROM closed_trades WHERE mode=?").bind(modeKey).first();
+    const totalClosed = Number(totalRow?.count) || 0;
+    const replayRows = (await db.prepare(`SELECT brain_indicators, pnl, pnl_pct FROM closed_trades WHERE mode=? ORDER BY id DESC LIMIT ${Math.max(1, Math.min(200, limit))}`).bind(modeKey).all()).results || [];
+    const chronological = [...replayRows].reverse();
+    const offset = Math.max(0, totalClosed - replayRows.length);
+
+    await db.prepare(`UPDATE ${brainTable} SET weight = default_weight`).run();
+
+    let applied = 0;
+    for (let index = 0; index < chronological.length; index++) {
+      const trade = chronological[index];
+      let indicators = [];
+      try {
+        indicators = JSON.parse(trade.brain_indicators || "[]");
+      } catch (e) {
+        indicators = [];
+      }
+      if (!indicators.length) continue;
+      const totalTrained = offset + index + 1;
+      if (totalTrained < cfg.min_trades_to_learn) continue;
+      await adjustBrainWeights(db, brainTable, cfg, indicators, Number(trade.pnl) || 0, Number(trade.pnl_pct) || 0, totalTrained);
+      applied += 1;
+    }
+
+    await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind(`trades_${modeKey}`, totalClosed.toString()).run();
+    await db.prepare("INSERT INTO brain_history (indicators, pnl, pnl_pct, created_at, mode) VALUES (?,?,?,?,?)")
+      .bind(JSON.stringify(["manual_retrain"]), 0, 0, new Date().toISOString(), modeKey).run();
+
+    return {
+      mode: modeKey,
+      replayed: replayRows.length,
+      applied,
+      weights: await getWeights(db, modeKey),
+      history: await getBrainHistorySnapshot(db),
+    };
+  }
+
+  async function buildWatchlistSnapshot(db) {
+    const positions = await getPositions(db);
+    const positionMap = new Map(positions.map((position) => [position.ticker, position]));
+    const logRows = (await db.prepare("SELECT ticker, price, score, rsi, signal, reasons, created_at FROM scan_log WHERE ticker != 'SPY' ORDER BY id DESC LIMIT 500").all()).results || [];
+    const tradeRows = (await db.prepare("SELECT ticker, ROUND(SUM(pnl), 2) as total_pnl, COUNT(*) as trades FROM closed_trades GROUP BY ticker").all()).results || [];
+    const tradeMap = new Map(tradeRows.map((row) => [row.ticker, { total_pnl: Number(row.total_pnl) || 0, trades: Number(row.trades) || 0 }]));
+
+    const historyByTicker = new Map();
+    const latestByTicker = new Map();
+    for (const row of logRows) {
+      if (!historyByTicker.has(row.ticker)) historyByTicker.set(row.ticker, []);
+      const history = historyByTicker.get(row.ticker);
+      if (history.length < 12) history.push(row);
+      if (!latestByTicker.has(row.ticker)) latestByTicker.set(row.ticker, row);
+    }
+
+    return Object.entries(WATCHLIST)
+      .filter(([ticker]) => ticker !== "SPY")
+      .map(([ticker, name]) => {
+        const position = positionMap.get(ticker);
+        const latest = latestByTicker.get(ticker);
+        const history = historyByTicker.get(ticker) || [];
+        const reasonTokens = splitLogReasons(latest?.reasons || "");
+        const confidence = scoreToConfidence(Number(latest?.score) || 0, Number(latest?.signal) || 0);
+        const meta = inferAssetMeta(ticker);
+        const fallbackPrice = position?.current_price || latest?.price || position?.entry_price || 0;
+        const spark = buildSparklineFromHistory(history, fallbackPrice);
+        const sparkStart = spark[0] || fallbackPrice || 0;
+        const sparkEnd = spark[spark.length - 1] || fallbackPrice || 0;
+        const price = fallbackPrice > 0 ? roundPrice(fallbackPrice, fallbackPrice) : roundPrice(sparkEnd, sparkEnd || 1);
+        const chg = sparkStart > 0 ? +(((sparkEnd - sparkStart) / sparkStart) * 100).toFixed(2) : +(position?.unrealized_pct || 0).toFixed(2);
+        const tradeStats = tradeMap.get(ticker) || { total_pnl: 0, trades: 0 };
+
+        return {
+          ticker,
+          name,
+          ...meta,
+          price,
+          chg,
+          spark,
+          conf: confidence,
+          status: deriveAssetStatus(position, Number(latest?.signal) || 0, confidence),
+          positionSize: position ? +((position.cost || position.entry_price * position.shares) || 0).toFixed(2) : 0,
+          entryPrice: position?.entry_price || null,
+          pnlAbs: +(position?.unrealized_pnl || 0).toFixed(2),
+          pnlPct: +(position?.unrealized_pct || 0).toFixed(2),
+          reasoning: buildReasoning(name, reasonTokens, position, Number(latest?.signal) || 0),
+          patterns: buildPatternHistory(reasonTokens, latest?.created_at, confidence),
+          mode: position?.mode || extractLogMode(latest?.reasons || ""),
+          score: latest?.score == null ? null : Number(latest.score),
+          signal: latest?.signal == null ? 0 : Number(latest.signal),
+          rsi: latest?.rsi == null ? null : Number(latest.rsi),
+          tradeCount: tradeStats.trades,
+          realizedPnl: tradeStats.total_pnl,
+          stopLoss: position?.stop_loss || null,
+          takeProfit: position?.take_profit || null,
+          lastSeen: latest?.created_at || null,
+        };
+      })
+      .sort((left, right) => right.conf - left.conf || left.ticker.localeCompare(right.ticker));
+  }
     const posMode = normalizeMode(pos.mode || "mid");
     const posPreset = MODE_PRESETS_FX[posMode];
     const bars = await fetchBarsYahoo(pos.ticker, "5d", "1d");
@@ -1563,7 +1986,12 @@ async function scan(db, env) {
 
       const prelim = generateSignal(row, prev, spyRow, weightCache.mid, ticker, "mid");
       const selectedMode = await selectModeForSignal(db, prelim.score, ticker);
-      if (!selectedMode) continue;
+      if (!selectedMode) {
+        results.scores.push({ ticker, name, price: roundPrice(row.close), score: prelim.score, rsi: prelim.rsi, signal: 0, reasons: prelim.reasons });
+        await db.prepare("INSERT INTO scan_log (created_at,ticker,price,score,rsi,signal,reasons) VALUES (?,?,?,?,?,?,?)")
+          .bind(now, ticker, row.close, prelim.score, prelim.rsi, 0, prelim.reasons.join(", ")).run();
+        continue;
+      }
 
       const modeWeights = await getCachedWeights(selectedMode);
       const { signal, score, rsi, atr, reasons, activeInd } = generateSignal(row, prev, spyRow, modeWeights, ticker, selectedMode);
@@ -1695,10 +2123,49 @@ function json(data, status = 200) {
   }));
 }
 
+const STATIC_DASHBOARD_ASSETS = new Map([
+  ["/", { body: dashboardIndexHtml, contentType: "text/html; charset=utf-8" }],
+  ["/index.html", { body: dashboardIndexHtml, contentType: "text/html; charset=utf-8" }],
+  ["/tokens.css", { body: tokensCss, contentType: "text/css; charset=utf-8" }],
+  ["/components.css", { body: componentsCss, contentType: "text/css; charset=utf-8" }],
+  ["/brain-panel.css", { body: brainPanelCss, contentType: "text/css; charset=utf-8" }],
+  ["/product-shell.css", { body: productShellCss, contentType: "text/css; charset=utf-8" }],
+  ["/trade-history.css", { body: tradeHistoryCss, contentType: "text/css; charset=utf-8" }],
+  ["/asset-detail.css", { body: assetDetailCss, contentType: "text/css; charset=utf-8" }],
+  ["/primitives.jsx", { body: primitivesJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/mock-data.jsx", { body: mockDataJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/statcard.jsx", { body: statcardJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/equity-curve.jsx", { body: equityCurveJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/watchlist.jsx", { body: watchlistJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/brain-panel.jsx", { body: brainPanelJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/trades.jsx", { body: tradesJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/trade-history.jsx", { body: tradeHistoryJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/settings-screen.jsx", { body: settingsScreenJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/asset-detail.jsx", { body: assetDetailJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/alerts-screen.jsx", { body: alertsScreenJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/tweaks.jsx", { body: tweaksJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/command-palette.jsx", { body: commandPaletteJsx, contentType: "text/babel; charset=utf-8" }],
+  ["/app.jsx", { body: appJsx, contentType: "text/babel; charset=utf-8" }],
+]);
+
+function serveStaticDashboardAsset(path) {
+  const asset = STATIC_DASHBOARD_ASSETS.get(path);
+  if (!asset) return null;
+
+  return new Response(asset.body, {
+    headers: {
+      "Content-Type": asset.contentType,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 async function handleAPI(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
   const db = env.DB;
+
+  await ensureCoreSchema(db);
 
   if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
@@ -1746,6 +2213,11 @@ async function handleAPI(request, env) {
       }
       return Response.redirect(url.origin + "/login", 302);
     }
+  }
+
+  const staticAsset = serveStaticDashboardAsset(path);
+  if (staticAsset) {
+    return staticAsset;
   }
 
   if (path.startsWith("/api/fx/")) {
@@ -1877,6 +2349,7 @@ async function handleAPI(request, env) {
       capital: +(capital || 0).toFixed(2),
       equity: +(equity || 0).toFixed(2),
       pnl: +((equity || 0) - cfg.initial_capital).toFixed(2),
+      paused: await getBotPaused(db),
       dataSource: getDataSourceLabel(env),
       spyStatus,
       positions: normalizedPositions,
@@ -1895,9 +2368,37 @@ async function handleAPI(request, env) {
     }
   }
 
+  if (path === "/api/watchlist" && request.method === "GET") {
+    try {
+      const assets = await buildWatchlistSnapshot(db);
+      return json({ assets });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
+  }
+
+  if (path === "/api/brain/history" && request.method === "GET") {
+    try {
+      return json({ history: await getBrainHistorySnapshot(db) });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
+  }
+
+  if (path === "/api/pause" && request.method === "GET") {
+    return json({ paused: await getBotPaused(db) });
+  }
+
+  if (path === "/api/pause" && request.method === "POST") {
+    const body = await request.json();
+    const paused = await setBotPaused(db, !!body.paused);
+    return json({ success: true, paused });
+  }
+
   // GET /api/scan — trigger scan
   if (path === "/api/scan") {
     try {
+      if (await getBotPaused(db)) return json({ paused: true, message: "Bot paused" });
       await processMonthlyDeposits(env);
       const result = await scan(db, env);
       return json(result);
@@ -1927,6 +2428,77 @@ async function handleAPI(request, env) {
     return json({ closed: results });
   }
 
+  if (path === "/api/force-entry" && request.method === "POST") {
+    try {
+      const body = await request.json();
+      const ticker = body.ticker;
+      const mode = isValidMode(body.mode) ? body.mode : "mid";
+      if (!ticker || !WATCHLIST[ticker]) return json({ error: "ticker required" }, 400);
+      if ((await getPositions(db)).find((position) => position.ticker === ticker)) return json({ error: "Position already open" }, 409);
+
+      const bars = await fetchBars(ticker, env);
+      if (bars.length < 50) return json({ error: "Insufficient market data" }, 400);
+      const enriched = addIndicators(bars);
+      if (enriched.length < 2) return json({ error: "Indicators unavailable" }, 400);
+
+      const row = enriched[enriched.length - 1];
+      const prev = enriched[enriched.length - 2];
+      const spyBars = await fetchBars("SPY", env);
+      let spyRow = null;
+      if (spyBars.length >= 50) {
+        const spyEnriched = addIndicators(spyBars);
+        spyRow = spyEnriched[spyEnriched.length - 1] || null;
+      }
+
+      const weights = await getWeights(db, mode);
+      const { score, atr, activeInd } = generateSignal(row, prev, spyRow, weights, ticker, mode);
+      const position = await openPosition(db, ticker, WATCHLIST[ticker], row.close, atr, score, activeInd, mode);
+      if (!position) return json({ error: "Unable to open position" }, 400);
+      return json({ success: true, position });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
+  }
+
+  if (path === "/api/position/stop" && request.method === "POST") {
+    try {
+      const body = await request.json();
+      const ticker = body.ticker;
+      const stopLoss = parseFloat(body.stopLoss);
+      if (!ticker || !Number.isFinite(stopLoss) || stopLoss <= 0) return json({ error: "invalid payload" }, 400);
+      const position = await db.prepare("SELECT * FROM positions WHERE ticker=?").bind(ticker).first();
+      if (!position) return json({ error: "Position not found" }, 404);
+
+      const normalizedStop = roundPrice(stopLoss, position.entry_price || stopLoss);
+      if (normalizedStop >= position.take_profit) return json({ error: "stop must stay below take profit" }, 400);
+      await db.prepare("UPDATE positions SET stop_loss=? WHERE ticker=?").bind(normalizedStop, ticker).run();
+      return json({ success: true, stop_loss: normalizedStop });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
+  }
+
+  if (path === "/api/position/lock-in" && request.method === "POST") {
+    try {
+      const body = await request.json();
+      const ticker = body.ticker;
+      const ratio = Math.max(0.1, Math.min(0.9, Number(body.ratio) || 0.5));
+      if (!ticker) return json({ error: "ticker required" }, 400);
+      const position = await db.prepare("SELECT * FROM positions WHERE ticker=?").bind(ticker).first();
+      if (!position) return json({ error: "Position not found" }, 404);
+
+      const currentPrice = position.current_price || position.entry_price;
+      if (currentPrice <= position.entry_price) return json({ error: "Position is not in profit" }, 400);
+
+      const lockedStop = roundPrice(position.entry_price + ((currentPrice - position.entry_price) * ratio), currentPrice);
+      const nextStop = Math.max(position.stop_loss || 0, lockedStop);
+      await db.prepare("UPDATE positions SET stop_loss=?, trailing_active=1 WHERE ticker=?").bind(nextStop, ticker).run();
+      return json({ success: true, stop_loss: nextStop });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
+  }
+
   // POST /api/reset
   if (path === "/api/reset" && request.method === "POST") {
     const cfg = await getSettings(db);
@@ -1943,6 +2515,16 @@ async function handleAPI(request, env) {
     await setCapital(db, cfg.initial_capital);
     await db.prepare("INSERT OR REPLACE INTO config VALUES ('total_trades', '0')").run();
     return json({ success: true, capital: cfg.initial_capital });
+  }
+
+  if (path === "/api/retrain" && request.method === "POST") {
+    try {
+      const body = await request.json();
+      const result = await retrainBrain(db, body.mode || "mid", body.limit || 50);
+      return json({ success: true, ...result });
+    } catch (e) {
+      return json({ error: e.message }, 500);
+    }
   }
 
   // GET /api/settings
@@ -2071,6 +2653,7 @@ async function handleAPI(request, env) {
 
   if (path === "/api/fx/scan") {
     try {
+      if (await getBotPaused(db)) return json({ paused: true, message: "Bot paused" });
       await processMonthlyDeposits(env);
       const result = await scanFx(db, env);
       return json(result);
@@ -2212,6 +2795,54 @@ async function handleAPI(request, env) {
 
     await db.prepare("DELETE FROM deposits WHERE id=?").bind(depositId).run();
     return json({ success: true });
+  }
+
+  if (path === "/api/alerts" && request.method === "GET") {
+    return json({ alerts: await listAlerts(db) });
+  }
+
+  if (path === "/api/alerts" && request.method === "POST") {
+    const body = await request.json();
+    if (!body.kind || !body.ticker) return json({ error: "kind and ticker required" }, 400);
+
+    await db.prepare(`
+      INSERT INTO alerts (kind, ticker, direction, price, pct, window_size, conf, pattern, pnl, status, fired_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      body.kind,
+      body.ticker,
+      body.direction || null,
+      body.price == null ? null : Number(body.price),
+      body.pct == null ? null : Number(body.pct),
+      body.window || body.windowSize || null,
+      body.conf == null ? null : Number(body.conf),
+      body.pattern || null,
+      body.pnl == null ? null : Number(body.pnl),
+      body.status || "armed",
+      body.firedAt || null,
+      new Date().toISOString()
+    ).run();
+
+    return json({ success: true, alerts: await listAlerts(db) });
+  }
+
+  if (path === "/api/alerts/toggle" && request.method === "POST") {
+    const body = await request.json();
+    const alertId = parseInt(body.id, 10);
+    if (!Number.isFinite(alertId)) return json({ error: "invalid id" }, 400);
+    const current = await db.prepare("SELECT status FROM alerts WHERE id=?").bind(alertId).first();
+    if (!current) return json({ error: "Alert not found" }, 404);
+    const nextStatus = current.status === "paused" ? "armed" : "paused";
+    await db.prepare("UPDATE alerts SET status=? WHERE id=?").bind(nextStatus, alertId).run();
+    return json({ success: true, alerts: await listAlerts(db) });
+  }
+
+  if (path === "/api/alerts/delete" && request.method === "POST") {
+    const body = await request.json();
+    const alertId = parseInt(body.id, 10);
+    if (!Number.isFinite(alertId)) return json({ error: "invalid id" }, 400);
+    await db.prepare("DELETE FROM alerts WHERE id=?").bind(alertId).run();
+    return json({ success: true, alerts: await listAlerts(db) });
   }
 
   if (path === "/api/reports") {
@@ -4468,7 +5099,10 @@ export default {
 
   // Cron trigger → scan every 5 min
   async scheduled(event, env) {
+    await ensureCoreSchema(env.DB);
+    await ensureFxSchema(env.DB);
     await processMonthlyDeposits(env);
+    if (await getBotPaused(env.DB)) return;
     await scan(env.DB, env);
     await scanFx(env.DB, env);
   },
