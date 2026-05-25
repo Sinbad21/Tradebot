@@ -2109,6 +2109,19 @@ function getTokenFromRequest(request) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function buildAuthCookie(request, token, maxAge = 86400) {
+  const url = new URL(request.url);
+  const parts = [
+    "tb_auth=" + encodeURIComponent(token),
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    "Max-Age=" + maxAge,
+  ];
+  if (url.protocol === "https:") parts.push("Secure");
+  return parts.join("; ");
+}
+
 function cors(response) {
   response.headers.set("Access-Control-Allow-Origin", "*");
   response.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -2165,8 +2178,6 @@ async function handleAPI(request, env) {
   const path = url.pathname;
   const db = env.DB;
 
-  await ensureCoreSchema(db);
-
   if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
   // Auth: if DASHBOARD_PASSWORD is set, protect all routes
@@ -2185,7 +2196,7 @@ async function handleAPI(request, env) {
     if (body.password === env.DASHBOARD_PASSWORD) {
       const token = await createToken(env);
       const res = json({ success: true });
-      res.headers.set("Set-Cookie", "tb_auth=" + encodeURIComponent(token) + "; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400");
+      res.headers.set("Set-Cookie", buildAuthCookie(request, token));
       return res;
     }
     return json({ error: "Password errata" }, 401);
@@ -2198,7 +2209,7 @@ async function handleAPI(request, env) {
       status: 302,
       headers: {
         "Location": url.origin + "/login",
-        "Set-Cookie": "tb_auth=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
+        "Set-Cookie": buildAuthCookie(request, "", 0)
       }
     });
   }
@@ -2218,6 +2229,17 @@ async function handleAPI(request, env) {
   const staticAsset = serveStaticDashboardAsset(path);
   if (staticAsset) {
     return staticAsset;
+  }
+
+  if (path === "/forex") {
+    return cors(new Response(DASHBOARD_FX_HTML, {
+      headers: { "Content-Type": "text/html" },
+    }));
+  }
+
+  if (path.startsWith("/api/")) {
+    if (!db) return json({ error: "Database binding missing" }, 500);
+    await ensureCoreSchema(db);
   }
 
   if (path.startsWith("/api/fx/")) {
@@ -3035,12 +3057,6 @@ async function handleAPI(request, env) {
   if (path === "/") {
     return serveStaticDashboardAsset("/") || serveStaticDashboardAsset("/index.html") || cors(new Response(dashboardIndexHtml, {
       headers: { "Content-Type": "text/html; charset=utf-8" },
-    }));
-  }
-
-  if (path === "/forex") {
-    return cors(new Response(DASHBOARD_FX_HTML, {
-      headers: { "Content-Type": "text/html" },
     }));
   }
 
