@@ -42,9 +42,9 @@ function makeRetrainHistory() {
   let conf = 62;
   const hours = [168, 144, 120, 96, 72, 48, 24, 2]; // hours ago
   for (let i = 0; i < hours.length; i++) {
-    conf = clamp(conf + (Math.random() - 0.3) * 7, 55, 92);
+    conf = clampBP(conf + (Math.random() - 0.3) * 7, 55, 92);
     const trades = Math.round(38 + Math.random() * 24);
-    const wr     = clamp(58 + (Math.random() - 0.4) * 16, 48, 78);
+    const wr     = clampBP(58 + (Math.random() - 0.4) * 16, 48, 78);
     out.push({
       id: `r-${i}`,
       ago: hours[i],
@@ -59,7 +59,7 @@ function makeRetrainHistory() {
 }
 
 /* ── Helpers ───────────────────────────────────────────────── */
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function clampBP(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function formatAgo(h) {
   if (h < 1)  return "just now";
   if (h < 24) return `${h}h ago`;
@@ -82,7 +82,7 @@ function ConfidenceHeatmap() {
 
   const cells = useMemoBP(() => {
     return (assets || []).map((asset) => {
-      const conf = clamp(Number(asset.conf) || 0, 0, 99);
+      const conf = clampBP(Number(asset.conf) || 0, 0, 99);
       return { ticker: asset.ticker, name: asset.name, conf, klass: asset.klass, status: asset.status };
     });
   }, [assets]);
@@ -353,8 +353,8 @@ function RetrainHistory() {
   const rows = useBotStore((state) => state.brainHistory);
   const history = useMemoBP(() => {
     const mapped = (rows || []).slice().reverse().map((row, index, all) => {
-      const conf = clamp(68 + (Number(row.pnl_pct) || 0) * 2.4, 35, 95);
-      const prevConf = index > 0 ? clamp(68 + (Number(all[index - 1].pnl_pct) || 0) * 2.4, 35, 95) : conf;
+      const conf = clampBP(68 + (Number(row.pnl_pct) || 0) * 2.4, 35, 95);
+      const prevConf = index > 0 ? clampBP(68 + (Number(all[index - 1].pnl_pct) || 0) * 2.4, 35, 95) : conf;
       const agoHours = row.created_at ? Math.max(0, Math.round((Date.now() - new Date(row.created_at).getTime()) / 3600000)) : 0;
       return {
         id: row.id,

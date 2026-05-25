@@ -1,6 +1,6 @@
 /* primitives.jsx — small shared bits for milestone 1 */
 
-const { useState, useEffect, useRef, useMemo } = React;
+const { useState: useStatePR, useEffect: useEffectPR, useRef: useRefPR } = React;
 
 /* ── Inline icons (Lucide-flavored, stroke 1.6) ──────────────── */
 const Icon = ({ d, size = 14, stroke = 1.6, fill = "none", style }) => (
@@ -35,9 +35,9 @@ const I = {
 
 /* ── InfoTip — small (i) icon with a glass tooltip ──────────── */
 function InfoTip({ title, children, align = "right", width = 280 }) {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState(null);
-  const triggerRef = useRef(null);
+  const [open, setOpen] = useStatePR(false);
+  const [pos, setPos] = useStatePR(null);
+  const triggerRef = useRefPR(null);
 
   function place() {
     const el = triggerRef.current;
@@ -56,7 +56,7 @@ function InfoTip({ title, children, align = "right", width = 280 }) {
   function show() { place(); setOpen(true); }
   function hide() { setOpen(false); }
 
-  useEffect(() => {
+  useEffectPR(() => {
     if (!open) return;
     const onScroll = () => place();
     window.addEventListener("scroll", onScroll, true);
@@ -100,10 +100,10 @@ function InfoTip({ title, children, align = "right", width = 280 }) {
 
 /* ── animated counter ───────────────────────────────────────── */
 function useAnimatedNumber(target, { duration = 700, decimals = 0 } = {}) {
-  const [val, setVal] = useState(target);
-  const startRef = useRef({ from: target, to: target, t0: 0 });
+  const [val, setVal] = useStatePR(target);
+  const startRef = useRefPR({ from: target, to: target, t0: 0 });
 
-  useEffect(() => {
+  useEffectPR(() => {
     const from = val;
     startRef.current = { from, to: target, t0: performance.now() };
     let raf;
@@ -126,7 +126,7 @@ function useAnimatedNumber(target, { duration = 700, decimals = 0 } = {}) {
 
 /* ── Sparkline ──────────────────────────────────────────────── */
 function Sparkline({ data, width = 96, height = 32, tone = "cyan", strokeWidth = 1.6, gradientId }) {
-  const id = useRef(gradientId || `sg-${Math.random().toString(36).slice(2, 8)}`).current;
+  const id = useRefPR(gradientId || `sg-${Math.random().toString(36).slice(2, 8)}`).current;
   const min = Math.min(...data);
   const max = Math.max(...data);
   const range = max - min || 1;

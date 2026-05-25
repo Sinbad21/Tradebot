@@ -1,10 +1,10 @@
 /* app.jsx — Tradebit product dashboard
    Sidebar + topbar + main grid. All design-system showcase removed. */
 
-const { useState, useEffect, useRef, useMemo } = React;
+const { useState: useStateAPP, useEffect: useEffectAPP, useMemo: useMemoAPP } = React;
 
 /* ── helpers ─────────────────────────────────────────────── */
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function clampAPP(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function roll(arr, next) {
   const out = arr.slice(1); out.push(next); return out;
 }
@@ -177,7 +177,7 @@ function Topbar({ paused, onTogglePause, mode, onCycleMode, dayPnl, onOpenCmd, o
 /* ── Stat row ────────────────────────────────────────────── */
 function StatRow() {
   const { status, assets } = useBotStore((state) => ({ status: state.status, assets: state.assets }));
-  const recentTrades = useMemo(() => getRecentClosedTrades(status.closedTrades), [status.closedTrades]);
+  const recentTrades = useMemoAPP(() => getRecentClosedTrades(status.closedTrades), [status.closedTrades]);
   const tradesToday = recentTrades.length;
   const winRate = Number(status.stats?.wr) || 0;
   const brainConf = assets.length
@@ -185,15 +185,15 @@ function StatRow() {
     : Number(status.brain?.confidence) || 0;
   const equity = Number(status.equity) || 0;
 
-  const eqSpark = useMemo(
+  const eqSpark = useMemoAPP(
     () => buildSpark((status.scanActivity || []).slice(-24).map((entry) => entry.equity), equity || 100000),
     [status.scanActivity, equity]
   );
-  const trSpark = useMemo(
+  const trSpark = useMemoAPP(
     () => buildSpark((status.scanActivity || []).slice(-24).map((entry) => (entry.buys?.length || 0) + (entry.closes?.length || 0)), tradesToday || 1),
     [status.scanActivity, tradesToday]
   );
-  const wrSpark = useMemo(() => {
+  const wrSpark = useMemoAPP(() => {
     const rolling = [];
     let wins = 0;
     recentTrades.slice().reverse().slice(-24).forEach((trade, index) => {
@@ -202,8 +202,8 @@ function StatRow() {
     });
     return buildSpark(rolling, winRate || 50);
   }, [recentTrades, winRate]);
-  const bcSpark = useMemo(
-    () => buildSpark((status.recentScores || []).slice(-24).map((entry) => clamp(52 + (Number(entry.score) || 0) * 18, 0, 100)), brainConf || 60),
+  const bcSpark = useMemoAPP(
+    () => buildSpark((status.recentScores || []).slice(-24).map((entry) => clampAPP(52 + (Number(entry.score) || 0) * 18, 0, 100)), brainConf || 60),
     [status.recentScores, brainConf]
   );
 
@@ -288,18 +288,18 @@ function App() {
     loading: state.loading,
     error: state.error,
   }));
-  const [active, setActive] = useState("dashboard");
-  const [activeAsset, setActiveAsset] = useState(null);  // ticker string or null
-  const [mode, setMode] = useState("mid");
-  const [cmdOpen, setCmdOpen] = useState(false);
-  const [tweaksOpen, setTweaksOpen] = useState(false);
+  const [active, setActive] = useStateAPP("dashboard");
+  const [activeAsset, setActiveAsset] = useStateAPP(null);  // ticker string or null
+  const [mode, setMode] = useStateAPP("mid");
+  const [cmdOpen, setCmdOpen] = useStateAPP(false);
+  const [tweaksOpen, setTweaksOpen] = useStateAPP(false);
 
   // Tweaks state
-  const [density, setDensity] = useState("cozy");
-  const [glow, setGlow] = useState("medium");
-  const [accent, setAccent] = useState("cyan");
+  const [density, setDensity] = useStateAPP("cozy");
+  const [glow, setGlow] = useStateAPP("medium");
+  const [accent, setAccent] = useStateAPP("cyan");
 
-  const dayPnl = useMemo(() => deriveDayPnl(status.closedTrades), [status.closedTrades]);
+  const dayPnl = useMemoAPP(() => deriveDayPnl(status.closedTrades), [status.closedTrades]);
 
   // Expose openAsset to children (so watchlist rows can deep-link)
   window.__openAsset = (ticker) => { setActiveAsset(ticker); };
@@ -307,7 +307,7 @@ function App() {
   window.__activeMode = mode;
 
   // inject shimmer once
-  useEffect(() => {
+  useEffectAPP(() => {
     if (document.getElementById("shimmer-css")) return;
     const s = document.createElement("style");
     s.id = "shimmer-css";
@@ -316,7 +316,7 @@ function App() {
   }, []);
 
   // ⌘K listener (and ⌘. for tweaks)
-  useEffect(() => {
+  useEffectAPP(() => {
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -332,7 +332,7 @@ function App() {
   }, []);
 
   // Apply accent palette via CSS custom props
-  useEffect(() => {
+  useEffectAPP(() => {
     const preset = (window.ACCENT_PRESETS || []).find(p => p.id === accent);
     if (!preset) return;
     document.documentElement.style.setProperty("--cyan", preset.cyan);

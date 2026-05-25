@@ -249,7 +249,7 @@ function EquityCurveCard() {
   function onMove(e) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const ratio = clamp((x - pad.l) / innerW, 0, 1);
+    const ratio = clampEQ((x - pad.l) / innerW, 0, 1);
     const i = Math.round(ratio * (series.length - 1));
     setHover({ i, x: xAt(i, series.length) });
   }
@@ -384,7 +384,7 @@ function EquityCurveCard() {
             <div
               className="equity-tooltip glass"
               style={{
-                left: clamp(hover.x - 80, 12, W - 172),
+                left: clampEQ(hover.x - 80, 12, W - 172),
                 top: 12,
               }}
             >
@@ -493,6 +493,6 @@ function EquityCurveCard() {
   );
 }
 
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function clampEQ(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 Object.assign(window, { EquityCurveCard });

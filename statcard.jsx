@@ -1,6 +1,6 @@
 /* statcard.jsx — StatCard component for Milestone 1 validation */
 
-const { useState, useEffect, useRef } = React;
+const { useState: useStateSC, useEffect: useEffectSC, useRef: useRefSC } = React;
 
 function StatCard({
   label,
@@ -22,9 +22,9 @@ function StatCard({
   const animated = useAnimatedNumber(value, { duration: 700, decimals });
 
   // detect direction of value change to flash
-  const prev = useRef(value);
-  const [flash, setFlash] = useState(null);
-  useEffect(() => {
+  const prev = useRefSC(value);
+  const [flash, setFlash] = useStateSC(null);
+  useEffectSC(() => {
     if (value === prev.current) return;
     setFlash(value > prev.current ? "up" : "down");
     prev.current = value;
