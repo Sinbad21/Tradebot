@@ -11,6 +11,8 @@ const REASON_TONE = {
   PATTERN_INVALIDATED: "amber",
   MANUAL: "neutral",
 };
+const REASONS = Object.keys(REASON_TONE);
+
 const BRAIN_NOTES = {
   TAKE_PROFIT: "Brain hit take-profit target. RSI in overbought territory, sell pressure increasing on the order book.",
   STOP_LOSS: "Hard stop-loss triggered. Pattern invalidated below the entry support; Brain cuts losses to protect capital.",

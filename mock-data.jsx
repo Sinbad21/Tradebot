@@ -75,11 +75,12 @@ function subscribeBotState(listener) {
 }
 
 function useBotStore(selector = (state) => state) {
-  return useSyncExternalStore(
+  const state = useSyncExternalStore(
     subscribeBotState,
-    () => selector(BOT_STORE.state),
-    () => selector(BOT_STORE.state)
+    () => BOT_STORE.state,
+    () => BOT_STORE.state
   );
+  return selector(state);
 }
 
 function colorFromTickerMD(ticker) {
