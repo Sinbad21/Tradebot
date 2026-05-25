@@ -127,14 +127,16 @@ function useAnimatedNumber(target, { duration = 700, decimals = 0 } = {}) {
 /* ── Sparkline ──────────────────────────────────────────────── */
 function Sparkline({ data, width = 96, height = 32, tone = "cyan", strokeWidth = 1.6, gradientId }) {
   const id = useRefPR(gradientId || `sg-${Math.random().toString(36).slice(2, 8)}`).current;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const clean = (data || []).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  const series = clean.length > 1 ? clean : clean.length === 1 ? [clean[0], clean[0]] : [0, 0];
+  const min = Math.min(...series);
+  const max = Math.max(...series);
   const range = max - min || 1;
-  const px = (i) => (i / (data.length - 1)) * (width - 2) + 1;
+  const px = (i) => (i / (series.length - 1)) * (width - 2) + 1;
   const py = (v) => height - 2 - ((v - min) / range) * (height - 4);
 
-  const points = data.map((v, i) => `${px(i).toFixed(2)},${py(v).toFixed(2)}`).join(" ");
-  const area = `M ${px(0).toFixed(2)},${height} L ${points.replaceAll(" ", " L ")} L ${px(data.length - 1).toFixed(2)},${height} Z`;
+  const points = series.map((v, i) => `${px(i).toFixed(2)},${py(v).toFixed(2)}`).join(" ");
+  const area = `M ${px(0).toFixed(2)},${height} L ${points.replaceAll(" ", " L ")} L ${px(series.length - 1).toFixed(2)},${height} Z`;
 
   const palette = {
     cyan:   { stroke: "var(--cyan)",   fill: "rgba(0,229,255,0.18)",  glow: "rgba(0,229,255,0.6)"  },
@@ -168,8 +170,8 @@ function Sparkline({ data, width = 96, height = 32, tone = "cyan", strokeWidth =
       />
       {/* last-point dot */}
       <circle
-        cx={px(data.length - 1)}
-        cy={py(data[data.length - 1])}
+        cx={px(series.length - 1)}
+        cy={py(series[series.length - 1])}
         r={2.4}
         fill={palette.stroke}
         style={{ filter: `drop-shadow(0 0 4px ${palette.glow})` }}

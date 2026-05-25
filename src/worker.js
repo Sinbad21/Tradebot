@@ -1461,6 +1461,291 @@ async function brainLearnFx(db, indicators, pnl, pnlPct, mode = "mid") {
   return `[FX ${mode}] ${isWin ? "WIN" : "LOSS"} ${pnlPct > 0 ? "+" : ""}${pnlPct.toFixed(1)}% → ${adjustments.join(", ")} [lr×${decayFactor.toFixed(2)}]`;
 }
 
+function extractLogMode(reasons = "") {
+  const match = /^\[(safe|mid|aggressive)\]\s*/i.exec(reasons || "");
+  return match ? normalizeMode(match[1].toLowerCase()) : "mid";
+}
+
+function splitLogReasons(reasons = "") {
+  return (reasons || "")
+    .replace(/^\[[^\]]+\]\s*/i, "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function colorFromTicker(ticker) {
+  const palette = [
+    "#00E5FF",
+    "#A855F7",
+    "#00FF88",
+    "#FFB020",
+    "#FF3D71",
+    "#7BD7FF",
+    "#84CC16",
+    "#F97316",
+  ];
+  let hash = 0;
+  for (const ch of ticker) hash = ((hash << 5) - hash) + ch.charCodeAt(0);
+  return palette[Math.abs(hash) % palette.length];
+}
+
+function inferAssetMeta(ticker) {
+  if (ticker.includes("-USD")) return { exch: "CRYPTO", klass: "crypto", color: colorFromTicker(ticker) };
+  if (ticker.endsWith(".MI") || ticker.endsWith(".DE") || ticker.endsWith(".PA") || ticker.endsWith(".AS")) {
+    return { exch: "EU", klass: "stock", color: colorFromTicker(ticker) };
+  }
+  return { exch: "US", klass: "stock", color: colorFromTicker(ticker) };
+}
+
+function scoreToConfidence(score, signal = 0) {
+  const base = 52 + (Number(score) || 0) * 18 + (signal === 1 ? 12 : signal === -1 ? -10 : 0);
+  return Math.max(8, Math.min(98, Math.round(base)));
+}
+
+function deriveAssetStatus(position, signal, confidence) {
+  if (position) return "holding";
+  if (signal === 1 || confidence >= 80) return "signaling";
+  if (signal === -1 || confidence < 40) return "cooldown";
+  return "watching";
+}
+
+function buildSparklineFromHistory(history, fallbackPrice = 0) {
+  const points = history
+    .slice(0, 12)
+    .map((entry) => Number(entry.price) || 0)
+    .filter((value) => value > 0)
+    .reverse();
+
+  if (points.length >= 2) {
+    return points.map((value, _idx, arr) => roundPrice(value, arr[arr.length - 1] || value));
+  }
+
+  if (fallbackPrice > 0) {
+    const base = Number(fallbackPrice);
+    return [
+      roundPrice(base * 0.994, base),
+      roundPrice(base * 1.002, base),
+      roundPrice(base, base),
+    ];
+  }
+
+  return [0, 0, 0];
+}
+
+function buildPatternHistory(reasonTokens, latestCreatedAt, confidence) {
+  const createdAtMs = latestCreatedAt ? new Date(latestCreatedAt).getTime() : Date.now();
+  if (!reasonTokens.length) {
+    return [{ p: "waiting", strength: (confidence / 100).toFixed(2), minsAgo: 5, outcome: "active" }];
+  }
+
+  return reasonTokens.slice(0, 3).map((token, index) => ({
+    p: token.toLowerCase().replace(/\s+/g, "-"),
+    strength: Math.max(0.35, Math.min(0.99, confidence / 100 - index * 0.08)).toFixed(2),
+    minsAgo: Math.max(1, Math.round((Date.now() - createdAtMs) / 60000) + index * 5),
+    outcome: index === 0 && confidence >= 75 ? "active" : confidence >= 65 ? "filled" : "expired",
+  }));
+}
+
+function buildReasoning(name, reasonTokens, position, signal) {
+  if (position) {
+    return `${name} has an open position with live risk controls active. ${reasonTokens.slice(0, 2).join(", ") || "The latest scan still supports the trade."}`;
+  }
+  if (reasonTokens.length) {
+    return `${name} is being scored from the latest scan. ${reasonTokens.slice(0, 3).join(", ")}.`;
+  }
+  if (signal === -1) {
+    return `${name} is in cooldown after a weak or risk-off signal.`;
+  }
+  return `${name} is being monitored for a cleaner setup on the next scan cycle.`;
+}
+
+function mapAlertRow(row) {
+  return {
+    ...row,
+    price: row.price == null ? null : Number(row.price),
+    pct: row.pct == null ? null : Number(row.pct),
+    conf: row.conf == null ? null : Number(row.conf),
+    pnl: row.pnl == null ? null : Number(row.pnl),
+    window: row.window_size || null,
+  };
+}
+
+async function listAlerts(db) {
+  const rows = (await db.prepare("SELECT * FROM alerts ORDER BY id DESC").all()).results || [];
+  return rows.map(mapAlertRow);
+}
+
+async function getBrainHistorySnapshot(db, limit = 8) {
+  let rows = [];
+  try {
+    rows = (await db.prepare(`SELECT id, indicators, pnl, pnl_pct, created_at, mode FROM brain_history ORDER BY id DESC LIMIT ${Math.max(1, Math.min(40, limit))}`).all()).results || [];
+  } catch (error) {
+    rows = (await db.prepare(`SELECT id, indicators, pnl, pnl_pct, created_at FROM brain_history ORDER BY id DESC LIMIT ${Math.max(1, Math.min(40, limit))}`).all()).results || [];
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    mode: row.mode || "mid",
+    pnl: Number(row.pnl) || 0,
+    pnl_pct: Number(row.pnl_pct) || 0,
+    indicators: (() => {
+      try {
+        return JSON.parse(row.indicators || "[]");
+      } catch (e) {
+        return [];
+      }
+    })(),
+  }));
+}
+
+async function adjustBrainWeights(db, brainTable, cfg, indicators, pnl, pnlPct, totalTrained) {
+  if (!Array.isArray(indicators) || !indicators.length) return { adjustments: [], decayFactor: 1, isWin: pnl > 0 };
+
+  const isWin = pnl > 0;
+  const magnitude = Math.min(Math.abs(pnlPct) / 5, 1.0);
+  const decayFactor = Math.max(0.3, 1.0 - (totalTrained / 500));
+  const delta = cfg.learn_rate * magnitude * decayFactor;
+  const adjustments = [];
+  const DECAY_TO_DEFAULT = 0.02;
+
+  for (const indicator of indicators) {
+    const row = await db.prepare(`SELECT weight, default_weight FROM ${brainTable} WHERE indicator=?`).bind(indicator).first();
+    if (!row) continue;
+    let newWeight = isWin ? Math.min(row.weight + delta, cfg.max_weight) : Math.max(row.weight - delta, cfg.min_weight);
+    newWeight = newWeight + (row.default_weight - newWeight) * DECAY_TO_DEFAULT;
+    await db.prepare(`UPDATE ${brainTable} SET weight=? WHERE indicator=?`).bind(+newWeight.toFixed(4), indicator).run();
+    adjustments.push(`${indicator}${isWin ? "+" : "-"}${delta.toFixed(3)}`);
+  }
+
+  if (!isWin && indicators.length <= 2) {
+    const inactive = ALL_BRAIN_INDICATORS.filter((indicator) => !indicators.includes(indicator));
+    const smallBonus = cfg.learn_rate * 0.08 * decayFactor;
+    for (const indicator of inactive) {
+      const row = await db.prepare(`SELECT weight, default_weight FROM ${brainTable} WHERE indicator=?`).bind(indicator).first();
+      if (!row) continue;
+      let newWeight = Math.min(row.weight + smallBonus, cfg.max_weight);
+      newWeight = newWeight + (row.default_weight - newWeight) * DECAY_TO_DEFAULT;
+      await db.prepare(`UPDATE ${brainTable} SET weight=? WHERE indicator=?`).bind(+newWeight.toFixed(4), indicator).run();
+    }
+  }
+
+  return { adjustments, decayFactor, isWin };
+}
+
+async function retrainBrain(db, mode = "mid", limit = 50) {
+  const modeKey = normalizeMode(mode);
+  const brainTable = `brain_${modeKey}`;
+  const cfg = await getSettings(db);
+  let totalClosed = 0;
+  let replayRows = [];
+
+  try {
+    const totalRow = await db.prepare("SELECT COUNT(*) as count FROM closed_trades WHERE mode=?").bind(modeKey).first();
+    totalClosed = Number(totalRow?.count) || 0;
+    replayRows = (await db.prepare(`SELECT brain_indicators, pnl, pnl_pct FROM closed_trades WHERE mode=? ORDER BY id DESC LIMIT ${Math.max(1, Math.min(200, limit))}`).bind(modeKey).all()).results || [];
+  } catch (error) {
+    const totalRow = await db.prepare("SELECT COUNT(*) as count FROM closed_trades").first();
+    totalClosed = Number(totalRow?.count) || 0;
+    replayRows = (await db.prepare(`SELECT brain_indicators, pnl, pnl_pct FROM closed_trades ORDER BY id DESC LIMIT ${Math.max(1, Math.min(200, limit))}`).all()).results || [];
+  }
+
+  const chronological = [...replayRows].reverse();
+  const offset = Math.max(0, totalClosed - replayRows.length);
+
+  await db.prepare(`UPDATE ${brainTable} SET weight = default_weight`).run();
+
+  let applied = 0;
+  for (let index = 0; index < chronological.length; index++) {
+    const trade = chronological[index];
+    let indicators = [];
+    try {
+      indicators = JSON.parse(trade.brain_indicators || "[]");
+    } catch (e) {
+      indicators = [];
+    }
+    if (!indicators.length) continue;
+    const totalTrained = offset + index + 1;
+    if (totalTrained < cfg.min_trades_to_learn) continue;
+    await adjustBrainWeights(db, brainTable, cfg, indicators, Number(trade.pnl) || 0, Number(trade.pnl_pct) || 0, totalTrained);
+    applied += 1;
+  }
+
+  await db.prepare("INSERT OR REPLACE INTO config VALUES (?, ?)").bind(`trades_${modeKey}`, totalClosed.toString()).run();
+  await db.prepare("INSERT INTO brain_history (indicators, pnl, pnl_pct, created_at, mode) VALUES (?,?,?,?,?)")
+    .bind(JSON.stringify(["manual_retrain"]), 0, 0, new Date().toISOString(), modeKey).run();
+
+  return {
+    mode: modeKey,
+    replayed: replayRows.length,
+    applied,
+    weights: await getWeights(db, modeKey),
+    history: await getBrainHistorySnapshot(db),
+  };
+}
+
+async function buildWatchlistSnapshot(db) {
+  const positions = await getPositions(db);
+  const positionMap = new Map(positions.map((position) => [position.ticker, position]));
+  const logRows = (await db.prepare("SELECT ticker, price, score, rsi, signal, reasons, created_at FROM scan_log WHERE ticker != 'SPY' ORDER BY id DESC LIMIT 500").all()).results || [];
+  const tradeRows = (await db.prepare("SELECT ticker, ROUND(SUM(pnl), 2) as total_pnl, COUNT(*) as trades FROM closed_trades GROUP BY ticker").all()).results || [];
+  const tradeMap = new Map(tradeRows.map((row) => [row.ticker, { total_pnl: Number(row.total_pnl) || 0, trades: Number(row.trades) || 0 }]));
+
+  const historyByTicker = new Map();
+  const latestByTicker = new Map();
+  for (const row of logRows) {
+    if (!historyByTicker.has(row.ticker)) historyByTicker.set(row.ticker, []);
+    const history = historyByTicker.get(row.ticker);
+    if (history.length < 12) history.push(row);
+    if (!latestByTicker.has(row.ticker)) latestByTicker.set(row.ticker, row);
+  }
+
+  return Object.entries(WATCHLIST)
+    .filter(([ticker]) => ticker !== "SPY")
+    .map(([ticker, name]) => {
+      const position = positionMap.get(ticker);
+      const latest = latestByTicker.get(ticker);
+      const history = historyByTicker.get(ticker) || [];
+      const reasonTokens = splitLogReasons(latest?.reasons || "");
+      const confidence = scoreToConfidence(Number(latest?.score) || 0, Number(latest?.signal) || 0);
+      const meta = inferAssetMeta(ticker);
+      const fallbackPrice = position?.current_price || latest?.price || position?.entry_price || 0;
+      const spark = buildSparklineFromHistory(history, fallbackPrice);
+      const sparkStart = spark[0] || fallbackPrice || 0;
+      const sparkEnd = spark[spark.length - 1] || fallbackPrice || 0;
+      const price = fallbackPrice > 0 ? roundPrice(fallbackPrice, fallbackPrice) : roundPrice(sparkEnd, sparkEnd || 1);
+      const chg = sparkStart > 0 ? +(((sparkEnd - sparkStart) / sparkStart) * 100).toFixed(2) : +(position?.unrealized_pct || 0).toFixed(2);
+      const tradeStats = tradeMap.get(ticker) || { total_pnl: 0, trades: 0 };
+
+      return {
+        ticker,
+        name,
+        ...meta,
+        price,
+        chg,
+        spark,
+        conf: confidence,
+        status: deriveAssetStatus(position, Number(latest?.signal) || 0, confidence),
+        positionSize: position ? +((position.cost || position.entry_price * position.shares) || 0).toFixed(2) : 0,
+        entryPrice: position?.entry_price || null,
+        pnlAbs: +(position?.unrealized_pnl || 0).toFixed(2),
+        pnlPct: +(position?.unrealized_pct || 0).toFixed(2),
+        reasoning: buildReasoning(name, reasonTokens, position, Number(latest?.signal) || 0),
+        patterns: buildPatternHistory(reasonTokens, latest?.created_at, confidence),
+        mode: position?.mode || extractLogMode(latest?.reasons || ""),
+        score: latest?.score == null ? null : Number(latest.score),
+        signal: latest?.signal == null ? 0 : Number(latest.signal),
+        rsi: latest?.rsi == null ? null : Number(latest.rsi),
+        tradeCount: tradeStats.trades,
+        realizedPnl: tradeStats.total_pnl,
+        stopLoss: position?.stop_loss || null,
+        takeProfit: position?.take_profit || null,
+        lastSeen: latest?.created_at || null,
+      };
+    })
+    .sort((left, right) => right.conf - left.conf || left.ticker.localeCompare(right.ticker));
+}
+
 async function scanFx(db, env) {
   await ensureFxSchema(db);
   const capital = await getCapitalFx(db);
