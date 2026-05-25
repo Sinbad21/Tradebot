@@ -69,12 +69,13 @@ function DailyPnlChart({ trades, days = 30 }) {
         {buckets.map((b, i) => {
           const pct = (Math.abs(b.pnl) / maxAbs) * 100;
           const pos = b.pnl >= 0;
+          const barHeight = Math.max(2, pct * 0.48);
           return (
             <div key={i} className="th-pnl-chart__col" title={`${b.pnl >= 0 ? "+" : "−"}$${fmt(Math.abs(b.pnl), { decimals: 2 })} · ${b.daysAgo}d ago`}>
               <div className="th-pnl-chart__track">
                 <span
                   className={"th-pnl-chart__bar " + (pos ? "is-pos" : "is-neg")}
-                  style={{ height: `${Math.max(2, pct * 0.95)}%` }}
+                  style={{ height: `${barHeight}%` }}
                 />
               </div>
             </div>
