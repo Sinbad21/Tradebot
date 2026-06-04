@@ -219,8 +219,14 @@ async function ensureCoreSchema(db) {
     opened_at TEXT,
     closed_at TEXT,
     brain_indicators TEXT DEFAULT '[]',
-    mode TEXT DEFAULT 'mid'
+    mode TEXT DEFAULT 'mid',
+    sl_at_close REAL DEFAULT 0,
+    tp_at_close REAL DEFAULT 0
   )`).run();
+
+  // Migration: add SL/TP-at-close columns to pre-existing databases (idempotent)
+  try { await db.prepare("ALTER TABLE closed_trades ADD COLUMN sl_at_close REAL DEFAULT 0").run(); } catch (e) {}
+  try { await db.prepare("ALTER TABLE closed_trades ADD COLUMN tp_at_close REAL DEFAULT 0").run(); } catch (e) {}
 
   await db.prepare(`CREATE TABLE IF NOT EXISTS brain (
     indicator TEXT PRIMARY KEY,
@@ -342,8 +348,14 @@ async function ensureFxSchema(db) {
     opened_at TEXT,
     closed_at TEXT,
     brain_indicators TEXT DEFAULT '[]',
-    mode TEXT DEFAULT 'mid'
+    mode TEXT DEFAULT 'mid',
+    sl_at_close REAL DEFAULT 0,
+    tp_at_close REAL DEFAULT 0
   )`).run();
+
+  // Migration: add SL/TP-at-close columns to pre-existing databases (idempotent)
+  try { await db.prepare("ALTER TABLE closed_trades_fx ADD COLUMN sl_at_close REAL DEFAULT 0").run(); } catch (e) {}
+  try { await db.prepare("ALTER TABLE closed_trades_fx ADD COLUMN tp_at_close REAL DEFAULT 0").run(); } catch (e) {}
 
   await db.prepare(`CREATE TABLE IF NOT EXISTS scan_log_fx (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1304,9 +1316,9 @@ async function closePosition(db, ticker, price, reason) {
 
   // Save closed trade
   await db.prepare(
-    `INSERT INTO closed_trades (ticker,name,entry_price,exit_price,shares,cost,revenue,pnl,pnl_pct,reason,opened_at,closed_at,brain_indicators,mode)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(pos.ticker, pos.name, pos.entry_price, execPrice, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators, mode).run();
+    `INSERT INTO closed_trades (ticker,name,entry_price,exit_price,shares,cost,revenue,pnl,pnl_pct,reason,opened_at,closed_at,brain_indicators,mode,sl_at_close,tp_at_close)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(pos.ticker, pos.name, pos.entry_price, execPrice, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators, mode, pos.stop_loss, pos.take_profit).run();
 
   // Brain learn
   let brainMsg = "";
@@ -1391,9 +1403,9 @@ async function closePositionFx(db, ticker, price, reason) {
   const pnlPct = +((execPrice - pos.entry_price) / pos.entry_price * 100).toFixed(2);
 
   await db.prepare(
-    `INSERT INTO closed_trades_fx (ticker,name,entry_price,exit_price,shares,cost,revenue,pnl,pnl_pct,reason,opened_at,closed_at,brain_indicators,mode)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(pos.ticker, pos.name, pos.entry_price, execPrice, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators, mode).run();
+    `INSERT INTO closed_trades_fx (ticker,name,entry_price,exit_price,shares,cost,revenue,pnl,pnl_pct,reason,opened_at,closed_at,brain_indicators,mode,sl_at_close,tp_at_close)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(pos.ticker, pos.name, pos.entry_price, execPrice, pos.shares, pos.cost, revenue, pnl, pnlPct, reason, pos.opened_at, new Date().toISOString(), pos.brain_indicators, mode, pos.stop_loss, pos.take_profit).run();
 
   let brainMsg = "";
   try {
@@ -2060,7 +2072,8 @@ async function scanFx(db, env) {
 
       if (pos.auto_sl && sl > 0 && pos.take_profit > 0) {
         if (livePrice <= sl) {
-          const trade = await closePositionFx(db, pos.ticker, livePrice, "stop_loss");
+          const closeReason = (trailingActive || pos.trailing_active) ? "trailing_stop" : "stop_loss";
+          const trade = await closePositionFx(db, pos.ticker, livePrice, closeReason);
           if (trade) results.closes.push(trade);
           continue;
         }
@@ -2241,7 +2254,8 @@ async function scan(db, env) {
       // Check SL/TP using ONLY live price (not stale daily high/low)
       if (pos.auto_sl) {
         if (livePrice <= sl) {
-          const trade = await closePosition(db, pos.ticker, livePrice, "stop_loss");
+          const closeReason = (trailingActive || pos.trailing_active) ? "trailing_stop" : "stop_loss";
+          const trade = await closePosition(db, pos.ticker, livePrice, closeReason);
           if (trade) results.closes.push(trade);
           continue;
         }
@@ -3222,6 +3236,46 @@ async function handleAPI(request, env) {
       const numDeposits = Number(depositRow?.count) || 0;
       const totalInvested = +(initialCapital + totalDeposited).toFixed(2);
 
+      // Profit factor per modalità
+      const pfByMode = (await db.prepare(`
+        SELECT mode,
+          ROUND(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 2) as gross_profit,
+          ROUND(ABS(SUM(CASE WHEN pnl < 0 THEN pnl ELSE 0 END)), 2) as gross_loss
+        FROM closed_trades GROUP BY mode
+      `).all()).results || [];
+
+      const profitFactors = {};
+      for (const row of pfByMode) {
+        profitFactors[row.mode] = row.gross_loss > 0
+          ? +(row.gross_profit / row.gross_loss).toFixed(2)
+          : (row.gross_profit > 0 ? 999 : 0); // 999 = "infinito" (nessuna perdita)
+      }
+
+      // Profit factor globale
+      const pfTotal = (await db.prepare(`
+        SELECT ROUND(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 2) as gp,
+          ROUND(ABS(SUM(CASE WHEN pnl < 0 THEN pnl ELSE 0 END)), 2) as gl
+        FROM closed_trades
+      `).first()) || {};
+      const globalProfitFactor = pfTotal.gl > 0 ? +(pfTotal.gp / pfTotal.gl).toFixed(2) : (pfTotal.gp > 0 ? 999 : 0);
+
+      // Max Drawdown: calcolato sulla sequenza temporale dei trade
+      const allTradesAsc = (await db.prepare(`
+        SELECT pnl FROM closed_trades ORDER BY closed_at ASC
+      `).all()).results || [];
+
+      let equity = cfg.initial_capital || 5000;
+      let peak = equity, maxDrawdown = 0, maxDrawdownPct = 0;
+      for (const t of allTradesAsc) {
+        equity += t.pnl;
+        if (equity > peak) peak = equity;
+        const dd = peak - equity;
+        if (dd > maxDrawdown) {
+          maxDrawdown = dd;
+          maxDrawdownPct = peak > 0 ? (dd / peak * 100) : 0;
+        }
+      }
+
       return json({
         bot: "stocks",
         initial_capital: initialCapital,
@@ -3240,6 +3294,10 @@ async function handleAPI(request, env) {
         numDeposits,
         totalInvested,
         equityCurve,
+        profitFactors,
+        globalProfitFactor,
+        maxDrawdown: +maxDrawdown.toFixed(2),
+        maxDrawdownPct: +maxDrawdownPct.toFixed(2),
       });
     } catch (e) {
       return json({ error: e.message }, 500);
@@ -3314,6 +3372,46 @@ async function handleAPI(request, env) {
         };
       });
 
+      // Profit factor per modalità
+      const pfByMode = (await db.prepare(`
+        SELECT mode,
+          ROUND(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 2) as gross_profit,
+          ROUND(ABS(SUM(CASE WHEN pnl < 0 THEN pnl ELSE 0 END)), 2) as gross_loss
+        FROM closed_trades_fx GROUP BY mode
+      `).all()).results || [];
+
+      const profitFactors = {};
+      for (const row of pfByMode) {
+        profitFactors[row.mode] = row.gross_loss > 0
+          ? +(row.gross_profit / row.gross_loss).toFixed(2)
+          : (row.gross_profit > 0 ? 999 : 0); // 999 = "infinito" (nessuna perdita)
+      }
+
+      // Profit factor globale
+      const pfTotal = (await db.prepare(`
+        SELECT ROUND(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 2) as gp,
+          ROUND(ABS(SUM(CASE WHEN pnl < 0 THEN pnl ELSE 0 END)), 2) as gl
+        FROM closed_trades_fx
+      `).first()) || {};
+      const globalProfitFactor = pfTotal.gl > 0 ? +(pfTotal.gp / pfTotal.gl).toFixed(2) : (pfTotal.gp > 0 ? 999 : 0);
+
+      // Max Drawdown: calcolato sulla sequenza temporale dei trade
+      const allTradesAsc = (await db.prepare(`
+        SELECT pnl FROM closed_trades_fx ORDER BY closed_at ASC
+      `).all()).results || [];
+
+      let equity = initialCapital || 1000;
+      let peak = equity, maxDrawdown = 0, maxDrawdownPct = 0;
+      for (const t of allTradesAsc) {
+        equity += t.pnl;
+        if (equity > peak) peak = equity;
+        const dd = peak - equity;
+        if (dd > maxDrawdown) {
+          maxDrawdown = dd;
+          maxDrawdownPct = peak > 0 ? (dd / peak * 100) : 0;
+        }
+      }
+
       return json({
         bot: "forex",
         initial_capital: initialCapital,
@@ -3332,6 +3430,10 @@ async function handleAPI(request, env) {
         numDeposits,
         totalInvested,
         equityCurve,
+        profitFactors,
+        globalProfitFactor,
+        maxDrawdown: +maxDrawdown.toFixed(2),
+        maxDrawdownPct: +maxDrawdownPct.toFixed(2),
       });
     } catch (e) {
       return json({ error: e.message }, 500);
@@ -4612,8 +4714,8 @@ function showTradeChart(idx){
     name:t.name,
     entry:t.entry_price,
     exit:t.exit_price,
-    sl:null,
-    tp:null,
+    sl:t.sl_at_close||null,
+    tp:t.tp_at_close||null,
     entryTime:t.opened_at,
     exitTime:t.closed_at,
     mode:t.mode,
@@ -4742,7 +4844,7 @@ async function load(){
       tb.innerHTML=d.closedTrades.map((t,i)=>{
         const w=t.pnl>=0;
         const dt=t.closed_at?new Date(t.closed_at).toLocaleString("it-IT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
-        const reason=t.reason==="stop_loss"?"SL":(t.reason==="take_profit"?"TP":(t.reason==="manual_close"?"Manuale":t.reason));
+        const reason=t.reason==="stop_loss"?"SL":(t.reason==="take_profit"?"TP":(t.reason==="trailing_stop"?"Trailing":(t.reason==="manual_close"?"Manuale":t.reason)));
         const modeBadge=renderModeBadge(t.mode);
         return '<tr style="cursor:pointer" onclick="showTradeChart('+i+')" title="Clicca per grafico"><td class="mono" style="font-size:.8rem">'+dt+'</td>'
           +'<td>'+t.name+'</td>'
@@ -5200,6 +5302,17 @@ function renderReports(data){
     html+='</div>';
   }
 
+  // Metriche professionali (Profit Factor + Max Drawdown)
+  const pf=Number(data.globalProfitFactor)||0;
+  const pfColor=pf>=1.5?"var(--green)":(pf>=1?"var(--yellow)":"var(--red)");
+  const pfLabel=pf>=999?"∞":pf.toFixed(2);
+  const ddPct=Number(data.maxDrawdownPct)||0;
+  const ddColor=ddPct<15?"var(--green)":(ddPct<30?"var(--yellow)":"var(--red)");
+  html+='<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:24px">';
+  html+='<div class="stat" style="border-color:'+pfColor+';min-height:auto"><div class="stat-label">Profit Factor</div><div class="stat-value" style="font-size:1.3rem;color:'+pfColor+'">'+pfLabel+'</div><div class="stat-sub">'+(pf>=1.5?'Ottimo':(pf>=1?'Positivo':'In perdita'))+'</div></div>';
+  html+='<div class="stat" style="border-color:'+ddColor+';min-height:auto"><div class="stat-label">Max Drawdown</div><div class="stat-value" style="font-size:1.3rem;color:'+ddColor+'">-€'+(Number(data.maxDrawdown)||0).toFixed(2)+'</div><div class="stat-sub">'+ddPct.toFixed(1)+'% dal picco</div></div>';
+  html+='</div>';
+
   html+='<div class="section-hdr" style="margin-top:0">Performance Mensile</div>';
   html+='<div class="table-shell" style="margin-bottom:24px;overflow-x:auto"><table><thead><tr>';
   html+='<th>Mese</th><th style="text-align:right">Trade</th><th style="text-align:right">WR</th><th style="text-align:right">PnL</th><th style="text-align:right">Media</th><th style="text-align:right">Best</th><th style="text-align:right">Worst</th>';
@@ -5237,6 +5350,35 @@ function renderReports(data){
       html+='<td style="text-align:right" class="mono">'+trades+'</td>';
       html+='<td style="text-align:right" class="mono '+(wr>=50?'g':'r')+'">'+wr+'%</td>';
       html+='<td style="text-align:right;font-weight:700" class="mono '+pnlCls(modeRow.pnl)+'">'+fmtPnl(modeRow.pnl)+'</td>';
+      html+='</tr>';
+    });
+    html+='</tbody></table></div>';
+
+    // Riepilogo per modalità su tutto il periodo, con Profit Factor
+    const modeAgg={};
+    data.monthlyByMode.forEach((m)=>{
+      const mk=String(m.mode||"mid").toLowerCase();
+      if(!modeAgg[mk]) modeAgg[mk]={trades:0,wins:0,pnl:0};
+      modeAgg[mk].trades+=Number(m.trades)||0;
+      modeAgg[mk].wins+=Number(m.wins)||0;
+      modeAgg[mk].pnl+=Number(m.pnl)||0;
+    });
+    html+='<div class="section-hdr">Riepilogo per Modalità (Profit Factor)</div>';
+    html+='<div class="table-shell" style="margin-bottom:24px;overflow-x:auto"><table><thead><tr><th>Modalità</th><th style="text-align:right">Trade</th><th style="text-align:right">WR</th><th style="text-align:right">PnL</th><th style="text-align:right">Profit Factor</th></tr></thead><tbody>';
+    const modeColors2={safe:"var(--green)",mid:"var(--blue)",aggressive:"var(--orange)"};
+    ["safe","mid","aggressive"].forEach((mode)=>{
+      const a=modeAgg[mode];
+      if(!a) return;
+      const wr=a.trades?Math.round(a.wins/a.trades*100):0;
+      const pfM=(data.profitFactors&&data.profitFactors[mode]!=null)?Number(data.profitFactors[mode]):null;
+      const pfMLabel=pfM==null?"—":(pfM>=999?"∞":pfM.toFixed(2));
+      const pfMCls=pfM==null?"":(pfM>=1.5?"g":(pfM>=1?"":"r"));
+      html+='<tr>';
+      html+='<td><span style="color:'+modeColors2[mode]+';font-weight:600;text-transform:capitalize">'+mode+'</span></td>';
+      html+='<td style="text-align:right" class="mono">'+a.trades+'</td>';
+      html+='<td style="text-align:right" class="mono '+(wr>=50?'g':'r')+'">'+wr+'%</td>';
+      html+='<td style="text-align:right;font-weight:700" class="mono '+(a.pnl>=0?'g':'r')+'">'+(a.pnl>=0?'+':'')+'€'+a.pnl.toFixed(2)+'</td>';
+      html+='<td style="text-align:right;font-weight:700" class="mono '+pfMCls+'">'+pfMLabel+'</td>';
       html+='</tr>';
     });
     html+='</tbody></table></div>';
