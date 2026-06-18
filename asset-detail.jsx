@@ -67,10 +67,11 @@ function AssetChart({ ticker, basePrice, color }) {
   const [candles, setCandles] = useStateAD([]);
   const cfg = AD_TF[tf];
 
-  const series = useMemoAD(() => {
-    const closes = candles.map((candle) => Number(candle.close) || 0).filter((value) => value > 0);
-    return closes.length >= 2 ? closes : fallbackSeries(basePrice);
-  }, [basePrice, candles]);
+  const realCloses = useMemoAD(() => (
+    candles.map((candle) => Number(candle.close) || 0).filter((value) => value > 0)
+  ), [candles]);
+  const hasData = realCloses.length >= 2;
+  const series = hasData ? realCloses : fallbackSeries(basePrice);
 
   useEffectAD(() => {
     let cancelled = false;
@@ -146,12 +147,18 @@ function AssetChart({ ticker, basePrice, color }) {
       <div className="ad-chart-card__head">
         <div>
           <div className="t-mono" style={{ fontSize: 10, color: "var(--text-4)", letterSpacing: ".14em" }}>PRICE · {tf}</div>
-          <div className="ad-chart-card__price t-num" style={{ color: pos ? "var(--profit)" : "var(--loss)", textShadow: pos ? "var(--glow-profit)" : "var(--glow-loss)" }}>
-            ${fmt(cursorVal, { decimals: cursorVal < 10 ? 4 : 2 })}
-          </div>
-          <div className={"ad-chart-card__delta t-mono " + (pos ? "is-pos" : "is-neg")}>
-            {pos ? "▲" : "▼"} {fmt(Math.abs(pnlPct), { decimals: 2 })}% over {tf}
-          </div>
+          {hasData ? (
+            <React.Fragment>
+              <div className="ad-chart-card__price t-num" style={{ color: pos ? "var(--profit)" : "var(--loss)", textShadow: pos ? "var(--glow-profit)" : "var(--glow-loss)" }}>
+                ${fmt(cursorVal, { decimals: cursorVal < 10 ? 4 : 2 })}
+              </div>
+              <div className={"ad-chart-card__delta t-mono " + (pos ? "is-pos" : "is-neg")}>
+                {pos ? "▲" : "▼"} {fmt(Math.abs(pnlPct), { decimals: 2 })}% over {tf}
+              </div>
+            </React.Fragment>
+          ) : (
+            <div className="ad-chart-card__price t-num" style={{ color: "var(--text-4)" }}>—</div>
+          )}
         </div>
         <div className="seg">
           {Object.keys(AD_TF).map(k => (
@@ -160,7 +167,8 @@ function AssetChart({ ticker, basePrice, color }) {
         </div>
       </div>
 
-      <div className="ad-chart-card__chart" ref={wrapRef} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+      <div className="ad-chart-card__chart" ref={wrapRef} onMouseMove={hasData ? onMove : undefined} onMouseLeave={() => setHover(null)}>
+        {hasData ? (
         <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
           <defs>
             <linearGradient id="ad-area" x1="0" x2="0" y1="0" y2="1">
@@ -192,6 +200,12 @@ function AssetChart({ ticker, basePrice, color }) {
             </g>
           )}
         </svg>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: H, color: "var(--text-4)", gap: 6 }}>
+            <div style={{ fontSize: 13 }}>Dati di prezzo non disponibili</div>
+            <div className="t-mono" style={{ fontSize: 11, opacity: .7 }}>{ticker} · {tf}</div>
+          </div>
+        )}
       </div>
     </div>
   );
