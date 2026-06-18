@@ -2557,31 +2557,33 @@ async function handleAPI(request, env) {
     if (!validRanges.includes(range)) return json({ error: "invalid range" }, 400);
 
     try {
-      const yahooInterval = interval === "1h" ? "60m" : interval;
-      const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=${range}&interval=${yahooInterval}`;
-      const res = await fetch(yahooUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-      if (!res.ok) return json({ error: "Yahoo fetch failed", status: res.status }, 502);
+      const yInterval = interval === "1h" ? "60m" : interval;
+      let candles = [];
+      let source = "";
 
-      const data = await res.json();
-      const result = data?.chart?.result?.[0];
-      if (!result) return json({ error: data?.chart?.error?.description || "No data", candles: [] });
-
-      const ts = result.timestamp || [];
-      const q = result.indicators?.quote?.[0] || {};
-      const candles = [];
-      for (let i = 0; i < ts.length; i++) {
-        if (q.open?.[i] != null && q.high?.[i] != null && q.low?.[i] != null && q.close?.[i] != null) {
-          candles.push({
-            time: ts[i],
-            open: q.open[i],
-            high: q.high[i],
-            low: q.low[i],
-            close: q.close[i],
-          });
-        }
+      // Crypto (e.g. FET-USD): use Revolut X — the same feed the bot trades on
+      if (ticker.includes("-USD")) {
+        try {
+          const rx = await fetchBarsRevolutX(ticker, env, range, interval);
+          if (rx && rx.length >= 2) { candles = rx; source = "revolutx"; }
+        } catch (e) {}
       }
 
-      return json({ ticker, interval, range, candles });
+      // Yahoo at the requested resolution
+      if (candles.length < 2) {
+        const y = await fetchBarsYahoo(ticker, range, yInterval);
+        if (y.length >= 2) { candles = y; source = "yahoo"; }
+      }
+
+      // Daily fallback: if intraday returns nothing, still show real daily candles
+      if (candles.length < 2 && interval !== "1d") {
+        const fbRange = (range === "1d" || range === "5d") ? "1mo" : range;
+        const y = await fetchBarsYahoo(ticker, fbRange, "1d");
+        if (y.length >= 2) { candles = y; source = "yahoo-daily"; }
+      }
+
+      candles = candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }));
+      return json({ ticker, interval, range, source, candles });
     } catch (e) {
       return json({ error: e.message }, 500);
     }
