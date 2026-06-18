@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS closed_trades (
   reason TEXT,
   opened_at TEXT,
   closed_at TEXT,
-  brain_indicators TEXT DEFAULT '[]'
+  brain_indicators TEXT DEFAULT '[]',
+  sl_at_close REAL DEFAULT 0,
+  tp_at_close REAL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS brain (
@@ -202,7 +204,9 @@ CREATE TABLE IF NOT EXISTS closed_trades_fx (
   opened_at TEXT,
   closed_at TEXT,
   brain_indicators TEXT DEFAULT '[]',
-  mode TEXT DEFAULT 'mid'
+  mode TEXT DEFAULT 'mid',
+  sl_at_close REAL DEFAULT 0,
+  tp_at_close REAL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS scan_log_fx (
